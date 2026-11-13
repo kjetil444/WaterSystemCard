@@ -27,7 +27,7 @@ A Home Assistant Lovelace card for a private water supply: well with submersible
 ### Manual
 
 1. Copy `water-system-card.js` to `/config/www/`
-2. Settings → Dashboards → ⋮ → Resources → Add `/local/water-system-card.js?v=1.9.0` as **JavaScript module**
+2. Settings → Dashboards → ⋮ → Resources → Add `/local/water-system-card.js?v=1.10.0` as **JavaScript module**
 
 ## HA package (recommended)
 
@@ -55,13 +55,21 @@ uv: switch.uv_lamp            # true (just draw it) or an entity: switch/binary_
 filter: true                  # true or a sensor (e.g. pressure drop)
 outdoor_tap: valve.outdoor_tap          # true or the tap's valve/switch
 outdoor_tap_shutoff: switch.tap_stop    # indoor stop valve (on/open = water in the outdoor pipe)
-irrigation: switch.irrigation           # water use while this runs isn't an away alarm
+irrigation: [switch.zone_1, switch.zone_2]   # zones; sprinklers spray while any runs, not an away alarm
+irrigation_shutoff: switch.irrigation_supply # indoor supply valve (on/open = water in the irrigation pipes)
+irrigation_frost_temp: 3                     # warn below this if the irrigation isn't winterized
+irrigation_max_minutes: 60                   # warn if a zone runs longer (stuck valve / broken pipe)
 tap_frost_temp: 0                       # warn below this outside if the outdoor tap isn't shut off
 ```
 
 They're drawn in the house (UV glows violet when the lamp is on), the outdoor tap sprays while open and gets a blue ring when
 it's at risk of freezing. With the package, UV, filter and outdoor tap are added to the maintenance list automatically
 (outdoor tap = winterize in autumn / open in spring, with a guide).
+
+Water flows to the outdoor tap through its own branch (the indoor tap stays dry), and sprinklers spray on the lawn while
+irrigation runs. Alerts: irrigation not winterized when frost comes (from the supply valve, or from your logged
+"Winterized" maintenance entry), irrigation running in frost, irrigation running too long, and a "frost is coming – close
+and drain the outdoor tap" reminder when there's no stop-valve entity. Notifications have "Stop irrigation" / "Close supply" buttons.
 
 ## Maintenance log
 

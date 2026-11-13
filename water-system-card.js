@@ -1,10 +1,10 @@
 /*
- * water-system-card  v1.9.0
+ * water-system-card  v1.10.0
  * Home Assistant custom Lovelace card: well → pump (with pump guard) → pressure tank → valve → house + water heater.
  * Self-contained, no HACS dependencies. Every entity is optional. Includes a visual editor.
  */
 
-const WSC_VERSION = "1.9.0";
+const WSC_VERSION = "1.10.0";
 const C = { water: "#38bdf8", ok: "#22c55e", warn: "#f59e0b", bad: "#ef4444", frost: "#60a5fa", heat: "#f97316", hot: "#f43f5e" };
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -64,6 +64,13 @@ const HELP = {
       "Har du frostfri utekran, må slangen likevel kobles fra, ellers tømmer ikke kranen seg.",
       "Vår (når frosten er over): steng utekranen, åpne stoppekranen inne og sjekk for lekkasje i veggen og inne.",
     ],
+    irrigation: [
+      "Høst (før frosten): steng tilførselen til hagevanningen inne og slå av styringen/timeren.",
+      "Åpne dreneringsventilene på de laveste punktene og la rørene renne tomme.",
+      "Blås gjerne ut rør og dyser med trykkluft på lavt trykk (ca. 2–3 bar) én sone om gangen, med sonens ventil åpen. Gå aldri over anleggets maks trykk.",
+      "Ta inn batteritimere, slanger og dyser som kan sprekke, og la ventilene stå litt åpne.",
+      "Vår: steng dreneringsventilene, åpne tilførselen sakte og kjør hver sone kort for å sjekke dyser og lekkasjer.",
+    ],
   },
   en: {
     precharge: [
@@ -108,12 +115,19 @@ const HELP = {
       "Even a frost-free tap needs the hose disconnected, or it can't drain.",
       "Spring (when frost is over): close the outdoor tap, open the indoor stop valve and check for leaks inside the wall and indoors.",
     ],
+    irrigation: [
+      "Autumn (before frost): close the indoor supply to the irrigation and switch off the controller/timer.",
+      "Open the drain valves at the lowest points and let the pipes run empty.",
+      "Optionally blow out pipes and nozzles with compressed air at low pressure (about 2–3 bar), one zone at a time with that zone's valve open. Never exceed the system's maximum pressure.",
+      "Bring in battery timers, hoses and nozzles that can crack, and leave the valves slightly open.",
+      "Spring: close the drain valves, open the supply slowly and run each zone briefly to check nozzles and leaks.",
+    ],
   },
 };
 const UNIT_DEC = { bar: 2, mbar: 0, kpa: 0, psi: 1, l: 0, gal: 1, "m³": 2, "l/min": 1, "gal/min": 1, "m³/h": 2, w: 0, kw: 2 };
 const UNIT_KEYS = {
   pressure: ["cut_in", "cut_out", "max_pressure", "low_pressure"],
-  temp: ["min_temp", "guard_warn_temp", "trace_warn_temp", "water_heater_low_temp", "water_heater_ok_temp", "legionella_temp", "cold_water_temp", "tap_frost_temp"],
+  temp: ["min_temp", "guard_warn_temp", "trace_warn_temp", "water_heater_low_temp", "water_heater_ok_temp", "legionella_temp", "cold_water_temp", "tap_frost_temp", "irrigation_frost_temp"],
   volume: ["water_heater_volume", "shower_liters", "drawdown_min"],
   power: ["power_threshold", "water_heater_power_threshold"],
 };
@@ -124,7 +138,7 @@ const PKG = {
   trace_off: "binary_sensor.water_heat_cable_off", night: "binary_sensor.water_night_activity", hot_low: "binary_sensor.water_hot_water_low",
   legionella: "binary_sensor.water_legionella_risk", leak: "binary_sensor.water_leak", away_alarm: "binary_sensor.water_away_alarm",
   precharge: "binary_sensor.water_tank_precharge_low", wear: "binary_sensor.water_pump_wear_trend", maint: "binary_sensor.water_maintenance_due",
-  tap_frost: "binary_sensor.water_outdoor_tap_frost",
+  tap_frost: "binary_sensor.water_outdoor_tap_frost", irr_frost: "binary_sensor.water_irrigation_frost", irr_long: "binary_sensor.water_irrigation_long_run",
 };
 const PKG_DEFAULTS = {
   away: "input_boolean.water_away", drawdown: "sensor.water_tank_drawdown_avg", drawdown_warn: PKG.precharge,
@@ -142,6 +156,8 @@ const MAINT = {
     fields: [{ key: "f_ftype", type: "text" }, { key: "f_pbefore", type: "number", q: "pressure" }] },
   outdoor_tap: { entity: "input_datetime.water_last_outdoor_tap", interval: "input_number.water_outdoor_tap_interval_days", days: 182, icon: "mdi:water-pump-outline",
     fields: [{ key: "f_tapact", type: "select", options: ["a_winter", "a_summer"] }, { key: "f_drained", type: "bool" }, { key: "f_hose", type: "bool" }] },
+  irrigation: { entity: "input_datetime.water_last_irrigation_service", interval: "input_number.water_irrigation_interval_days", days: 182, icon: "mdi:sprinkler-variant",
+    fields: [{ key: "f_tapact", type: "select", options: ["a_winter", "a_summer"] }, { key: "f_blown", type: "bool" }, { key: "f_drainv", type: "bool" }, { key: "f_timer", type: "bool" }] },
 };
 // helpers from the HA package that hold the card's settings (internal units: bar, °C, L, W, s, min, d)
 const HELPERS = {
@@ -152,15 +168,16 @@ const HELPERS = {
   night_end: "input_number.water_night_end", night_starts_warn: "input_number.water_night_starts_warn", water_heater_low_temp: "input_number.water_hot_low_temp",
   water_heater_ok_temp: "input_number.water_hot_ok_temp", legionella_temp: "input_number.water_legionella_temp", legionella_days: "input_number.water_legionella_days",
   water_heater_volume: "input_number.water_heater_volume", drawdown_min: "input_number.water_drawdown_min",
+  irrigation_frost_temp: "input_number.water_irrigation_frost_temp", irrigation_max_minutes: "input_number.water_irrigation_max_minutes",
 };
 // settings panel: sections of [config key, quantity or fixed unit]; extra rows: helper-only numbers and switches
 const SETTINGS = [
   ["set_pump", [["cut_in", "pressure"], ["cut_out", "pressure"], ["max_run_minutes", "min"], ["short_cycle_seconds", "s"], ["guard_delay", "s"], ["power_threshold", "power"], ["current_threshold", "A"]]],
-  ["set_frost", [["min_temp", "temp"], ["guard_warn_temp", "temp"], ["trace_warn_temp", "temp"], ["tap_frost_temp", "temp"],
+  ["set_frost", [["min_temp", "temp"], ["guard_warn_temp", "temp"], ["trace_warn_temp", "temp"], ["tap_frost_temp", "temp"], ["irrigation_frost_temp", "temp"],
     ["@input_number.water_trace_auto_on_temp", "temp"], ["!input_boolean.water_auto_heat_cable"]]],
   ["set_hot", [["@wh_target", "temp"], ["water_heater_low_temp", "temp"], ["water_heater_ok_temp", "temp"], ["legionella_temp", "temp"], ["legionella_days", "d"], ["water_heater_volume", "volume"]]],
-  ["set_night", [["night_start", "h"], ["night_end", "h"], ["night_starts_warn", ""], ["drawdown_min", "volume"]]],
-  ["set_maint", [["%precharge", "d"], ["%sample", "d"], ["%uv", "d"], ["%filter", "d"], ["%outdoor_tap", "d"]]],
+  ["set_night", [["night_start", "h"], ["night_end", "h"], ["night_starts_warn", ""], ["drawdown_min", "volume"], ["irrigation_max_minutes", "min"]]],
+  ["set_maint", [["%precharge", "d"], ["%sample", "d"], ["%uv", "d"], ["%filter", "d"], ["%outdoor_tap", "d"], ["%irrigation", "d"]]],
   ["set_auto", [["!input_boolean.water_notifications"], ["!input_boolean.water_away_close_valve"]]],
 ];
 
@@ -221,6 +238,10 @@ const DEFAULTS = {
   outdoor_tap_shutoff: null,     // indoor stop valve for the outdoor tap (on/open = water in the outdoor pipe)
   irrigation: null,              // switch/binary_sensor; water use while it runs is not a leak/away alarm
   tap_frost_temp: 0,             // warn below this (outdoor) if the outdoor tap isn't shut off
+  irrigation_shutoff: null,      // indoor supply valve for the irrigation (on/open = water in the irrigation pipes)
+  irrigation_frost_temp: 3,      // warn below this (outdoor) if the irrigation isn't winterized
+  irrigation_max_minutes: 60,    // warn if irrigation runs longer than this
+  interval_irrigation: null,
   interval_precharge: null, interval_sample: null, interval_uv: null, interval_filter: null, interval_outdoor_tap: null,
   language: null,
 };
@@ -253,7 +274,13 @@ const STRINGS = {
     "input_boolean.water_notifications": "Push notifications", "input_boolean.water_away_close_valve": "Close main valve when away",
     m_outdoor_tap: "Outdoor tap", f_tapact: "Done", a_winter: "Winterized (closed and drained)", a_summer: "Opened for summer",
     f_drained: "Pipe drained", f_hose: "Hose disconnected", b_tap_frost: "It's {v} outside and the outdoor tap isn't shut off – risk of a burst pipe.",
-    b_uv_off: "The UV lamp is off – the water isn't being disinfected.", t_uv: "UV lamp", t_filter: "Filter", c_tap: "Outdoor tap", c_irr: "Irrigation",
+    b_uv_off: "The UV lamp is off – the water isn't being disinfected.",
+    m_irrigation: "Irrigation", f_blown: "Blown out with compressed air", f_drainv: "Drain valves opened", f_timer: "Timer/controller off",
+    b_irr_frost: "It's {v} outside and the irrigation isn't winterized – drain the pipes before the frost.",
+    b_irr_run_frost: "Irrigation is running at {v} outside – stop it before pipes and nozzles freeze.",
+    b_irr_long: "Irrigation has run for {v} – check for a stuck valve or a broken pipe.",
+    b_tap_winter: "Frost is coming ({v}) – remember to close and drain the outdoor tap.",
+    irrigation_frost_temp: "Irrigation frost warning below", irrigation_max_minutes: "Irrigation max run time", t_uv: "UV lamp", t_filter: "Filter", c_tap: "Outdoor tap", c_irr: "Irrigation",
     dlg_title: "{v} – log", f_date: "Date", f_notes: "Notes", save: "Save as done", cancel: "Cancel", prev: "Previous entries",
     no_prev: "No previous entries.", need_num: "Enter a number", need_date: "Pick a date", no_log: "History isn't saved: add a Local To-do list (see README).",
     last: "Last", f_pre: "Measured pre-charge", f_cutin: "Cut-in pressure", f_cutout: "Cut-out pressure", f_adj: "Pre-charge adjusted to",
@@ -301,7 +328,13 @@ const STRINGS = {
     "input_boolean.water_notifications": "Push-varsler", "input_boolean.water_away_close_valve": "Steng hovedkran når borte",
     m_outdoor_tap: "Utekran", f_tapact: "Utført", a_winter: "Vinterklargjort (stengt og tømt)", a_summer: "Åpnet for sommeren",
     f_drained: "Røret tømt", f_hose: "Slangen koblet fra", b_tap_frost: "Det er {v} ute og utekranen er ikke stengt – fare for frostsprengning.",
-    b_uv_off: "UV-lampen er av – vannet blir ikke desinfisert.", t_uv: "UV-lampe", t_filter: "Filter", c_tap: "Utekran", c_irr: "Hagevanning",
+    b_uv_off: "UV-lampen er av – vannet blir ikke desinfisert.",
+    m_irrigation: "Hagevanning", f_blown: "Blåst ut med trykkluft", f_drainv: "Dreneringsventiler åpnet", f_timer: "Timer/styring slått av",
+    b_irr_frost: "Det er {v} ute og hagevanningen er ikke vinterklargjort – tøm rørene før frosten.",
+    b_irr_run_frost: "Hagevanningen går mens det er {v} ute – stopp den før rør og dyser fryser.",
+    b_irr_long: "Hagevanningen har gått i {v} – sjekk om en ventil henger eller et rør er ødelagt.",
+    b_tap_winter: "Frosten nærmer seg ({v}) – husk å stenge og tømme utekranen.",
+    irrigation_frost_temp: "Hagevanning: frostvarsel under", irrigation_max_minutes: "Hagevanning: maks gangtid", t_uv: "UV-lampe", t_filter: "Filter", c_tap: "Utekran", c_irr: "Hagevanning",
     dlg_title: "{v} – registrer", f_date: "Dato", f_notes: "Notat", save: "Lagre som utført", cancel: "Avbryt", prev: "Tidligere registreringer",
     no_prev: "Ingen tidligere registreringer.", need_num: "Skriv inn et tall", need_date: "Velg en dato", no_log: "Historikk lagres ikke: legg til en Local To-do-liste (se README).",
     last: "Sist", f_pre: "Målt fortrykk", f_cutin: "Innkoblingstrykk", f_cutout: "Utkoblingstrykk", f_adj: "Fortrykk justert til",
@@ -382,6 +415,9 @@ svg.diagram .whv { font-size:17px; font-weight:700; fill:#fff; stroke:rgba(0,0,0
 #uv.on .uvglow { opacity:.35; animation:hglow 2s ease-in-out infinite; }
 #uv .uvtube { opacity:.25; }
 #uv.on .uvtube { opacity:1; }
+#spr { display:none; }
+#spr.on { display:inline; }
+#spr .jet { fill:none; stroke:${C.water}; stroke-width:2.8; stroke-linecap:round; stroke-dasharray:2 6; animation:flow .6s linear infinite; }
 #otap .spray, #otap .tapwarn { display:none; }
 #otap.open .spray { display:inline; animation:lkdrop .7s ease-in infinite; --dy:6px; }
 #otap.frost .tapwarn { display:inline; animation:lkring 1s ease-in-out infinite; }
@@ -524,7 +560,7 @@ class WaterSystemCard extends HTMLElement {
     ["uv", "filter", "outdoor_tap"].forEach((k) => { if (cfg[`has_${k}`] && !cfg[k]) cfg[k] = cfg[`${k}_entity`] || true; if (cfg[`has_${k}`] === false) cfg[k] = null; });
     if (cfg.use_package) Object.entries(PKG_DEFAULTS).forEach(([k, v]) => { if (cfg[k] === undefined) cfg[k] = v; });
     if (cfg.use_package && cfg.maintenance === undefined)
-      cfg.maintenance = ["precharge", "sample", ...(cfg.uv ? ["uv"] : []), ...(cfg.filter ? ["filter"] : []), ...(cfg.outdoor_tap ? ["outdoor_tap"] : [])];
+      cfg.maintenance = ["precharge", "sample", ...(cfg.uv ? ["uv"] : []), ...(cfg.filter ? ["filter"] : []), ...(cfg.outdoor_tap ? ["outdoor_tap"] : []), ...(cfg.irrigation ? ["irrigation"] : [])];
     this._config = cfg;
     this._sig = "";
     this._hist = null;
@@ -581,6 +617,19 @@ class WaterSystemCard extends HTMLElement {
     return redraw;
   }
 
+  _irrIds() { const v = this._config.irrigation; return !v ? [] : (Array.isArray(v) ? v : [v]).filter((x) => typeof x === "string"); }
+
+  // latest logged season action for a maintenance item: "winter", "summer" or null
+  _season(key) {
+    const it = this._maintItems().find((x) => x.key === key);
+    if (!it) return null;
+    const h = this._logFor(it)[0];
+    if (!h) return null;
+    const txt = h.lines.join(" ");
+    const has = (k) => txt.includes(STRINGS.nb[k]) || txt.includes(STRINGS.en[k]);
+    return has("a_winter") ? "winter" : has("a_summer") ? "summer" : null;
+  }
+
   _leaks() {
     const c = this._config, out = [];
     const add = (x, loc) => {
@@ -600,6 +649,7 @@ class WaterSystemCard extends HTMLElement {
     (c.buttons || []).forEach((b) => ids.push(b.entity));
     ids.push(c.away, c.drawdown, c.drawdown_warn, c.cycle_avg_7d, c.cycle_avg_30d, c.pump_trend, c.outdoor_tap_shutoff, c.irrigation);
     ["uv", "filter", "outdoor_tap"].forEach((k) => { if (typeof c[k] === "string") ids.push(c[k]); });
+    ids.push(...this._irrIds(), c.irrigation_shutoff);
     if (c.use_package) ids.push(...Object.values(HELPERS));
     if (c.use_package) ids.push(...Object.values(PKG), "sensor.water_pump_starts_night");
     this._maintItems().forEach((m) => ids.push(m.entity, m.interval));
@@ -885,10 +935,22 @@ class WaterSystemCard extends HTMLElement {
     const ent = (k) => (typeof c[k] === "string" ? c[k] : null);
     m.uvOn = ent("uv") && /^(switch|binary_sensor|input_boolean|light)\./.test(c.uv) ? this._isOn(c.uv) : c.uv ? true : null;
     m.tapOpen = ent("outdoor_tap") ? this._isOn(c.outdoor_tap) : false;
-    m.irrigating = c.irrigation ? this._isOn(c.irrigation) : false;
+    const irr = this._irrIds().filter((id) => this._isOn(id));
+    m.irrigating = irr.length > 0;
+    m.irrFor = m.irrigating ? Math.max(...irr.map((id) => now - new Date(this._st(id).last_changed || now).getTime())) : 0;
     m.tapLive = c.outdoor_tap_shutoff ? this._isOn(c.outdoor_tap_shutoff) : null;   // water in the outdoor pipe
     m.tapFrost = !!c.outdoor_tap && m.outT != null && m.outT < c.tap_frost_temp && (m.tapOpen || m.tapLive === true);
     m.awayAlarm = m.away && (m.flowing || m.running === true) && !m.tapOpen && !m.irrigating;
+    // outdoor use (tap / irrigation) – shown as flow in the outdoor branch instead of the indoor tap
+    m.outdoorUse = (m.tapOpen || m.irrigating) && m.tapLive !== false && (c.tank_location === "house" || m.valveOpen);
+    m.indoorUse = m.flowing && !m.outdoorUse;
+    // winterizing reminders (from the shut-off valve if there is one, otherwise from the maintenance log)
+    const tapSeason = this._season("outdoor_tap"), irrSeason = this._season("irrigation");
+    m.tapWinter = !!c.outdoor_tap && !c.outdoor_tap_shutoff && !m.tapFrost && m.outT != null && m.outT < c.tap_frost_temp + 3 && tapSeason !== "winter";
+    const irrLive = c.irrigation_shutoff ? this._isOn(c.irrigation_shutoff) : irrSeason !== "winter";
+    m.irrFrost = this._irrIds().length > 0 && m.outT != null && m.outT < c.irrigation_frost_temp && irrLive && !m.irrigating;
+    m.irrRunFrost = m.irrigating && m.outT != null && m.outT < 1;
+    m.irrLong = m.irrigating && m.irrFor > c.irrigation_max_minutes * 60e3;
     m.drawdown = this._canon(c.drawdown, "volume");
     m.precharge = c.drawdown_warn ? this._isOn(c.drawdown_warn) : c.drawdown_min != null && m.drawdown != null && m.drawdown < c.drawdown_min;
     m.cyc7 = this._num(c.cycle_avg_7d);
@@ -920,6 +982,8 @@ class WaterSystemCard extends HTMLElement {
       m.lowPressure = pk("low_pressure", m.lowPressure);
       m.awayAlarm = pk("away_alarm", m.awayAlarm);
       m.tapFrost = pk("tap_frost", m.tapFrost);
+      m.irrFrost = pk("irr_frost", m.irrFrost);
+      m.irrLong = pk("irr_long", m.irrLong);
       if (m.stats) {
         m.stats.longRun = pk("long_run", m.stats.longRun);
         m.stats.shortCycle = pk("short_cycle", m.stats.shortCycle);
@@ -1105,23 +1169,27 @@ class WaterSystemCard extends HTMLElement {
         <path d="M490,94 h44 v4 a12,12 0 0 1 -12,12 h-20 a12,12 0 0 1 -12,-12 z" fill="${fixture}" opacity=".7"/>
       </g>
       ${c.filter ? `<g id="filt" ${info(typeof c.filter === "string" ? c.filter : null)}>
-        <rect x="481" y="124" width="18" height="6" rx="2" fill="${fixture}"/>
-        <rect x="483" y="130" width="14" height="30" rx="5" fill="url(#metal)" stroke="${muted}" stroke-width="2"/>
-        <path d="M486,136 h8 M486,141 h8 M486,146 h8 M486,151 h8" stroke="${muted}" stroke-width="1.5"/>
+        <rect x="487" y="124" width="18" height="6" rx="2" fill="${fixture}"/>
+        <rect x="489" y="130" width="14" height="30" rx="5" fill="url(#metal)" stroke="${muted}" stroke-width="2"/>
+        <path d="M492,136 h8 M492,141 h8 M492,146 h8 M492,151 h8" stroke="${muted}" stroke-width="1.5"/>
       </g>` : ""}
       ${c.uv ? `<g id="uv" ${info(typeof c.uv === "string" ? c.uv : null)}>
-        <rect class="uvglow" x="501" y="118" width="38" height="24" rx="10" fill="#a78bfa"/>
-        <rect x="504" y="121" width="32" height="18" rx="8" fill="url(#metal)" stroke="${muted}" stroke-width="2"/>
-        <rect class="uvtube" x="508" y="127" width="24" height="6" rx="3" fill="#a78bfa"/>
+        <rect class="uvglow" x="505" y="118" width="32" height="24" rx="10" fill="#a78bfa"/>
+        <rect x="508" y="121" width="26" height="18" rx="8" fill="url(#metal)" stroke="${muted}" stroke-width="2"/>
+        <rect class="uvtube" x="512" y="127" width="18" height="6" rx="3" fill="#a78bfa"/>
       </g>` : ""}
       ${c.outdoor_tap ? `<g id="otap" ${info(typeof c.outdoor_tap === "string" ? c.outdoor_tap : c.outdoor_tap_shutoff)}>
-        <path class="pipe-base" d="M${inHouse ? 160 : 452},150 H${inHouse ? 148 : 440}" style="stroke-width:6"/>
+        <path class="pipe-base" d="M${inHouse ? 174 : 480},130 V150 H${inHouse ? 148 : 440}" style="stroke-width:6"/>
+        <path id="pw5" class="pipe-water" d="M${inHouse ? 174 : 480},130 V150 H${inHouse ? 148 : 440}" style="stroke-width:3"/>
         <rect x="${inHouse ? 136 : 428}" y="144" width="14" height="10" rx="3" fill="${fixture}"/>
         <rect x="${inHouse ? 136 : 428}" y="148" width="6" height="12" rx="2" fill="${fixture}"/>
         <rect x="${inHouse ? 140 : 432}" y="138" width="8" height="5" rx="2" fill="${fixture}"/>
         <path class="spray" d="M${inHouse ? 139 : 431},164 l-2,5 M${inHouse ? 139 : 431},164 l0,6 M${inHouse ? 139 : 431},164 l2,5" stroke="${C.water}" stroke-width="2" stroke-linecap="round"/>
         <circle class="tapwarn" cx="${inHouse ? 139 : 431}" cy="151" r="15" fill="none" stroke="${C.frost}" stroke-width="2.5"/>
       </g>` : ""}
+      ${this._irrIds().length || c.irrigation ? `<g id="spr" ${info(this._irrIds()[0])}>${(inHouse ? [108] : [120, 350, 420]).map((x) => `
+        <path class="jet" d="M${x},161 q-22,-36 -48,8"/><path class="jet" d="M${x},161 q22,-36 48,8"/><path class="jet" d="M${x},161 q-8,-42 -24,8"/><path class="jet" d="M${x},161 q8,-42 24,8"/>
+        <rect x="${x - 3}" y="160" width="6" height="10" rx="2" fill="${fixture}"/>`).join("")}</g>` : ""}
       ${hasWh ? `
       <g id="wh" ${info(c.water_heater || c.water_heater_temp || c.water_heater_power)}>
         <rect class="glow" x="576" y="74" width="48" height="98" rx="18" fill="${C.hot}"/>
@@ -1169,6 +1237,10 @@ class WaterSystemCard extends HTMLElement {
     }
     if (m.awayAlarm) b(C.bad, "mdi:home-alert", this._t("b_away_alarm"));
     if (m.tapFrost) b(C.frost, "mdi:water-pump-off", this._t("b_tap_frost", this._fv(m.outT, "temp")));
+    if (m.irrRunFrost) b(C.bad, "mdi:sprinkler-variant", this._t("b_irr_run_frost", this._fv(m.outT, "temp")));
+    if (m.irrLong) b(C.warn, "mdi:timer-alert-outline", this._t("b_irr_long", this._dur(m.irrFor, false)));
+    if (m.irrFrost) b(C.frost, "mdi:sprinkler-variant", this._t("b_irr_frost", this._fv(m.outT, "temp")));
+    if (m.tapWinter) b(C.frost, "mdi:water-pump-off", this._t("b_tap_winter", this._fv(m.outT, "temp")));
     if (m.uvOn === false) b(C.warn, "mdi:lightbulb-alert-outline", this._t("b_uv_off"));
     if (m.guard) b(C.bad, "mdi:engine-off", this._t("b_guard"));
     if (m.stats && m.stats.longRun) b(C.bad, "mdi:timer-alert", this._t("b_long", this._dur(m.stats.runFor, false)));
@@ -1200,9 +1272,14 @@ class WaterSystemCard extends HTMLElement {
     pump.classList.toggle("run", !!m.running);
     pump.classList.toggle("trip", !!m.guard);
     q("pw1").classList.toggle("flow", !!m.running);
-    ["pw2", "pw3", "pw4"].forEach((id) => { const e = q(id); if (e) { e.classList.toggle("flow", !!m.flowing); e.style.opacity = m.valveOpen ? "" : ".12"; } });
+    const inside = !!m.indoorUse;
+    q("pw2").classList.toggle("flow", !!(m.flowing || m.outdoorUse));
+    q("pw2").style.opacity = m.valveOpen ? "" : ".12";
+    ["pw3", "pw4"].forEach((id) => { const e = q(id); if (e) { e.classList.toggle("flow", inside); e.style.opacity = m.valveOpen ? "" : ".12"; } });
+    if (q("pw5")) q("pw5").classList.toggle("flow", !!m.outdoorUse);
+    if (q("spr")) q("spr").classList.toggle("on", !!m.irrigating);
     if (q("valve")) q("valve").style.setProperty("--vc", m.valveOpen ? C.ok : C.bad);
-    q("tap").classList.toggle("on", !!m.flowing);
+    q("tap").classList.toggle("on", inside);
     const active = new Set(m.leaks.map((l) => l.loc));
     this.shadowRoot.querySelectorAll(".lkfx").forEach((g) => { g.style.display = active.has(g.id.slice(3)) ? "" : "none"; });
 
@@ -1221,7 +1298,7 @@ class WaterSystemCard extends HTMLElement {
     }
     q("fguard").style.display = m.guardOn ? "" : "none";
     if (q("uv")) q("uv").classList.toggle("on", m.uvOn !== false);
-    if (q("otap")) { q("otap").classList.toggle("open", m.tapOpen || m.irrigating); q("otap").classList.toggle("frost", m.tapFrost); }
+    if (q("otap")) { q("otap").classList.toggle("open", m.tapOpen && m.outdoorUse); q("otap").classList.toggle("frost", m.tapFrost || m.tapWinter); }
     if (q("box")) q("box").style.stroke = m.frost || m.guardWarn ? C.frost : m.guardOn ? C.heat : "";
     if (q("htrace")) {
       q("htrace").classList.toggle("on", !!m.traceOn);
@@ -1492,6 +1569,10 @@ class WaterSystemCard extends HTMLElement {
     const date = vals._date;
     try {
       if (it.entity && this._st(it.entity)) await this._hass.callService("input_datetime", "set_datetime", { entity_id: it.entity, date });
+      // tell the package whether the irrigation is winterized (used by its frost alarm)
+      const wz = "input_datetime.water_irrigation_winterized";
+      if (it.key === "irrigation" && this._st(wz) && vals.f_tapact)
+        await this._hass.callService("input_datetime", "set_datetime", { entity_id: wz, date: vals.f_tapact === "a_winter" ? date : "2000-01-01" });
       const log = this._logEntity();
       if (log) {
         const summary = `${it.name} – ${date}`;
@@ -1618,7 +1699,8 @@ class WaterSystemCard extends HTMLElement {
     mk(c.valve, this._t("c_valve"), "mdi:valve-open", "mdi:valve-closed", { key: "valve", offBad: true, col: C.ok, valve: true });
     if (typeof c.outdoor_tap === "string") mk(c.outdoor_tap, this._t("c_tap"), "mdi:water-pump", "mdi:water-pump-off", { col: C.water, valve: /^valve\./.test(c.outdoor_tap) });
     if (c.outdoor_tap_shutoff) mk(c.outdoor_tap_shutoff, `${this._t("c_tap")} (${this._t("c_valve").toLowerCase()})`, "mdi:valve-open", "mdi:valve-closed", { col: C.water, valve: true });
-    if (c.irrigation) mk(c.irrigation, this._t("c_irr"), "mdi:sprinkler-variant", "mdi:sprinkler-variant", { col: C.ok });
+    this._irrIds().forEach((id, i, a) => mk(id, a.length > 1 ? (this._st(id) || { attributes: {} }).attributes.friendly_name || this._t("c_irr") : this._t("c_irr"), "mdi:sprinkler-variant", "mdi:sprinkler-variant", { col: C.ok, valve: /^valve\./.test(id) }));
+    if (c.irrigation_shutoff) mk(c.irrigation_shutoff, `${this._t("c_irr")} (${this._t("c_valve").toLowerCase()})`, "mdi:valve-open", "mdi:valve-closed", { col: C.ok, valve: true });
     mk(c.away, this._t("c_away"), "mdi:home-export-outline", "mdi:home-outline", { col: "#a78bfa" });
     mk(c.frost_guard, this._t("c_guard"), "mdi:radiator", "mdi:radiator-off", { key: "frost_guard", col: C.heat });
     mk(c.heat_trace, this._t("c_trace"), "mdi:heating-coil", "mdi:heating-coil", { key: "heat_trace", col: C.heat, offBad: m.traceWarn });
@@ -1668,7 +1750,7 @@ const EDITOR_SCHEMA = [
     { name: "maintenance_log", selector: ent("todo") },
     { name: "maintenance", selector: { select: { multiple: true, mode: "list", options: [
       { value: "precharge", label: "Tank pre-charge check" }, { value: "sample", label: "Water sample" },
-      { value: "uv", label: "UV lamp" }, { value: "filter", label: "Filter change" }, { value: "outdoor_tap", label: "Outdoor tap (winter/summer)" }] } } },
+      { value: "uv", label: "UV lamp" }, { value: "filter", label: "Filter change" }, { value: "outdoor_tap", label: "Outdoor tap (winter/summer)" }, { value: "irrigation", label: "Irrigation (winter/summer)" }] } } },
   ] },
   { type: "expandable", name: "", title: "Features (show / hide)", flatten: true, schema: [
     { type: "grid", name: "", schema: [
@@ -1708,14 +1790,16 @@ const EDITOR_SCHEMA = [
     { name: "filter_entity", selector: ent("sensor") },
     { name: "outdoor_tap_entity", selector: ent(["valve", "switch"]) },
     { name: "outdoor_tap_shutoff", selector: ent(["valve", "switch", "input_boolean"]) },
-    { name: "irrigation", selector: ent(["switch", "binary_sensor", "valve"]) },
+    { name: "irrigation", selector: ent(["switch", "binary_sensor", "valve"], { multiple: true }) },
+    { name: "irrigation_shutoff", selector: ent(["valve", "switch", "input_boolean"]) },
+    { type: "grid", name: "", schema: [{ name: "irrigation_frost_temp", selector: num("°C", -10, 10, 0.5) }, { name: "irrigation_max_minutes", selector: num("min", 5, 600, 5) }] },
     { name: "tap_frost_temp", selector: num("°C", -20, 10, 0.5) },
   ] },
   { type: "expandable", name: "", title: "Maintenance intervals (if not using the HA package)", flatten: true, schema: [
     { type: "grid", name: "", schema: [
       { name: "interval_precharge", selector: num("d", 30, 1095, 1) }, { name: "interval_sample", selector: num("d", 30, 3650, 1) },
       { name: "interval_uv", selector: num("d", 30, 1095, 1) }, { name: "interval_filter", selector: num("d", 14, 730, 1) },
-      { name: "interval_outdoor_tap", selector: num("d", 30, 730, 1) },
+      { name: "interval_outdoor_tap", selector: num("d", 30, 730, 1) }, { name: "interval_irrigation", selector: num("d", 30, 730, 1) },
     ] },
   ] },
   { type: "expandable", name: "", title: "Water heater", flatten: true, schema: [
@@ -1782,7 +1866,8 @@ const EDITOR_LABELS = {
   show_events: "Event log", show_labels: "Labels in drawing",
   has_uv: "UV unit", has_filter: "Filter", has_outdoor_tap: "Outdoor tap", uv_entity: "UV lamp entity (on = lamp lit) or lamp hours",
   filter_entity: "Filter sensor (optional)", outdoor_tap_entity: "Outdoor tap valve (optional)", outdoor_tap_shutoff: "Indoor stop valve for outdoor tap",
-  irrigation: "Irrigation (not a leak while running)", tap_frost_temp: "Outdoor tap frost warning below",
+  irrigation: "Irrigation zones (not a leak while running)", irrigation_shutoff: "Indoor supply valve for irrigation",
+  irrigation_frost_temp: "Irrigation frost warning below", irrigation_max_minutes: "Irrigation max run time", interval_irrigation: "Irrigation every", tap_frost_temp: "Outdoor tap frost warning below",
   interval_precharge: "Pre-charge every", interval_sample: "Water sample every", interval_uv: "UV lamp every", interval_filter: "Filter every",
   interval_outdoor_tap: "Outdoor tap every", show_tiles: "Value tiles", show_stats: "Pump statistics", show_history: "History graph", show_controls: "Buttons",
 };

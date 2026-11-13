@@ -151,6 +151,26 @@ input_number:
     step: 0.5
     unit_of_measurement: "°C"
     icon: mdi:water-pump-off
+  water_irrigation_frost_temp:
+    name: Water irrigation frost warning below
+    min: -10
+    max: 10
+    step: 0.5
+    unit_of_measurement: "°C"
+    icon: mdi:sprinkler-variant
+  water_irrigation_max_minutes:
+    name: Water irrigation max run time
+    min: 5
+    max: 600
+    step: 5
+    unit_of_measurement: min
+    icon: mdi:timer-alert-outline
+  water_irrigation_interval_days:
+    name: Water irrigation service interval
+    min: 30
+    max: 730
+    step: 1
+    unit_of_measurement: d
   water_outdoor_tap_interval_days:
     name: Water outdoor tap check interval
     min: 30
@@ -241,6 +261,14 @@ input_datetime:
     name: Water last outdoor tap service
     has_date: true
     has_time: false
+  water_last_irrigation_service:
+    name: Water last irrigation service
+    has_date: true
+    has_time: false
+  water_irrigation_winterized:
+    name: Water irrigation winterized
+    has_date: true
+    has_time: false
 
 # -------------------------------------------------------------------------------------
 # Template entities
@@ -269,7 +297,8 @@ template:
           water_heater: "switch.vvb"                       # switch.* or water_heater.*
           outdoor_tap: ""                                  # valve/switch for the outdoor tap (open = water running). '' if none
           outdoor_tap_shutoff: ""                          # indoor stop valve for the outdoor tap (open/on = water in the outdoor pipe)
-          irrigation: ""                                   # switch/binary_sensor – water use while it runs is not an away alarm
+          irrigation: ""                                   # irrigation zone switches/valves, comma separated – water use while they run is not an away alarm
+          irrigation_shutoff: ""                           # indoor supply valve for the irrigation (open/on = water in the irrigation pipes)
 
   # ---- pump state, alarms ----
   - binary_sensor:
@@ -405,9 +434,10 @@ template:
         state: >
           {% set c = states.sensor.water_system_config.attributes if states.sensor.water_system_config is not none else {} %}
           {% set f = c.get('flow', '') %}
-          {% set irr = c.get('irrigation', '') %}
+          {% set irr = c.get('irrigation', '').split(',') | map('trim') | select('ne', '') | list %}
           {% set tap = c.get('outdoor_tap', '') %}
-          {% set excused = (irr != '' and states(irr) in ['on', 'open']) or (tap != '' and states(tap) in ['on', 'open']) %}
+          {% set excused = (irr | select('is_state', 'on') | list | count + irr | select('is_state', 'open') | list | count) > 0
+                           or (tap != '' and states(tap) in ['on', 'open']) %}
           {{ is_state('input_boolean.water_away', 'on') and not excused and
              (is_state('binary_sensor.water_pump_running', 'on') or (f != '' and states(f) | float(0) > 0.1)) }}
 
@@ -422,6 +452,38 @@ template:
           {% set t = states(c.get('outdoor_temp', '')) | float(99) %}
           {% set live = (tap != '' and states(tap) in ['on', 'open']) or (sh != '' and states(sh) in ['on', 'open']) %}
           {{ (tap != '' or sh != '') and live and t < states('input_number.water_tap_frost_temp') | float(0) }}
+
+      - name: Water irrigation running
+        unique_id: water_irrigation_running
+        device_class: running
+        icon: mdi:sprinkler-variant
+        state: >
+          {% set c = states.sensor.water_system_config.attributes if states.sensor.water_system_config is not none else {} %}
+          {% set irr = c.get('irrigation', '').split(',') | map('trim') | select('ne', '') | list %}
+          {{ (irr | select('is_state', 'on') | list | count + irr | select('is_state', 'open') | list | count) > 0 }}
+
+      - name: Water irrigation long run
+        unique_id: water_irrigation_long_run
+        device_class: problem
+        icon: mdi:timer-alert-outline
+        delay_on:
+          minutes: "{{ states('input_number.water_irrigation_max_minutes') | int(60) }}"
+        state: "{{ is_state('binary_sensor.water_irrigation_running', 'on') }}"
+
+      - name: Water irrigation frost
+        unique_id: water_irrigation_frost
+        device_class: problem
+        icon: mdi:sprinkler-variant
+        state: >
+          {% set c = states.sensor.water_system_config.attributes if states.sensor.water_system_config is not none else {} %}
+          {% set irr = c.get('irrigation', '') %}
+          {% set sh = c.get('irrigation_shutoff', '') %}
+          {% set t = states(c.get('outdoor_temp', '')) | float(99) %}
+          {% set w = states('input_datetime.water_irrigation_winterized') %}
+          {% set winterized = w not in ['unknown', 'unavailable', ''] and as_datetime(w) is not none
+                              and (now() - as_local(as_datetime(w))).days < 200 %}
+          {% set live = (states(sh) in ['on', 'open']) if sh != '' else not winterized %}
+          {{ irr != '' and live and t < states('input_number.water_irrigation_frost_temp') | float(3) }}
 
       - name: Water tank precharge low
         unique_id: water_tank_precharge_low
@@ -454,7 +516,8 @@ template:
                ('water_last_water_sample', 'water_sample_interval_days', 'Vannprøve'),
                ('water_last_uv_lamp', 'water_uv_interval_days', 'UV-lampe'),
                ('water_last_filter_change', 'water_filter_interval_days', 'Filter'),
-                 ('water_last_outdoor_tap', 'water_outdoor_tap_interval_days', 'Utekran')] %}
+                 ('water_last_outdoor_tap', 'water_outdoor_tap_interval_days', 'Utekran'),
+                 ('water_last_irrigation_service', 'water_irrigation_interval_days', 'Hagevanning')] %}
             {% set d = states('input_datetime.' ~ key) %}
             {% if d not in ['unknown', 'unavailable', ''] and as_datetime(d) is not none %}
               {% if (now() - as_local(as_datetime(d))).days > states('input_number.' ~ interval) | int(365) %}
@@ -735,6 +798,15 @@ automation:
         target: {entity_id: input_number.water_outdoor_tap_interval_days}
         data: {value: 182}
       - action: input_number.set_value
+        target: {entity_id: input_number.water_irrigation_frost_temp}
+        data: {value: 3}
+      - action: input_number.set_value
+        target: {entity_id: input_number.water_irrigation_max_minutes}
+        data: {value: 60}
+      - action: input_number.set_value
+        target: {entity_id: input_number.water_irrigation_interval_days}
+        data: {value: 182}
+      - action: input_number.set_value
         target: {entity_id: input_number.water_pump_power_threshold}
         data: {value: 50}
       - action: input_number.set_value
@@ -860,6 +932,19 @@ automation:
         to: "on"
         id: tap_frost
       - trigger: state
+        entity_id: binary_sensor.water_irrigation_frost
+        to: "on"
+        id: irr_frost
+      - trigger: template
+        value_template: >
+          {{ is_state('binary_sensor.water_irrigation_running', 'on') and
+             states(state_attr('sensor.water_system_config', 'outdoor_temp')) | float(99) < 1 }}
+        id: irr_run_frost
+      - trigger: state
+        entity_id: binary_sensor.water_irrigation_long_run
+        to: "on"
+        id: irr_long
+      - trigger: state
         entity_id: binary_sensor.water_tank_precharge_low
         to: "on"
         id: precharge
@@ -883,6 +968,9 @@ automation:
         hot_low: ["Lite varmtvann", "Varmtvannet er {{ states(state_attr('sensor.water_system_config', 'hot_water_temp')) }} °C.", false, [{"action": "WATER_HEATER_ON", "title": "Slå på bereder"}]]
         legionella: ["🦠 Legionella", "Varmtvannet har ikke vært over {{ states('input_number.water_legionella_temp') | int }} °C på {{ states('input_number.water_legionella_days') | int }} dager.", false, []]
         tap_frost: ["❄️ Utekranen", "Det er {{ states(state_attr('sensor.water_system_config', 'outdoor_temp')) }} °C ute og utekranen er ikke stengt – fare for frostsprengning.", true, [{"action": "WATER_TAP_CLOSE", "title": "Steng utekran"}]]
+        irr_frost: ["❄️ Hagevanning", "Det er {{ states(state_attr('sensor.water_system_config', 'outdoor_temp')) }} °C ute og hagevanningen er ikke vinterklargjort – tøm rørene før frosten.", false, [{"action": "WATER_IRR_CLOSE", "title": "Steng tilførsel"}]]
+        irr_run_frost: ["❄️ Hagevanning går i frost", "Hagevanningen går mens det er {{ states(state_attr('sensor.water_system_config', 'outdoor_temp')) }} °C ute.", true, [{"action": "WATER_IRR_STOP", "title": "Stopp hagevanning"}]]
+        irr_long: ["⏱️ Hagevanning", "Hagevanningen har gått lenge – sjekk om en ventil henger eller et rør er ødelagt.", true, [{"action": "WATER_IRR_STOP", "title": "Stopp hagevanning"}]]
         precharge: ["Trykktanken", "Tanken gir bare {{ states('sensor.water_tank_drawdown_avg') }} L per syklus – sjekk fortrykket.", false, []]
         wear: ["Pumpe-slitasje?", "Pumpesyklusene er lengre / strømtrekket høyere enn 30-dagerssnittet.", false, []]
       m: "{{ msgs[trigger.id] }}"
@@ -920,6 +1008,14 @@ automation:
         event_type: mobile_app_notification_action
         event_data: {action: WATER_TAP_CLOSE}
         id: tap
+      - trigger: event
+        event_type: mobile_app_notification_action
+        event_data: {action: WATER_IRR_CLOSE}
+        id: irr_close
+      - trigger: event
+        event_type: mobile_app_notification_action
+        event_data: {action: WATER_IRR_STOP}
+        id: irr_stop
     actions:
       - choose:
           - conditions: "{{ trigger.id == 'close' }}"
@@ -936,6 +1032,19 @@ automation:
               - action: "{{ 'valve.close_valve' if t.startswith('valve.') else 'homeassistant.turn_off' }}"
                 target:
                   entity_id: "{{ t }}"
+          - conditions: "{{ trigger.id in ['irr_close', 'irr_stop'] }}"
+            sequence:
+              - variables:
+                  targets: >
+                    {% set c = states.sensor.water_system_config.attributes %}
+                    {% if trigger.id == 'irr_close' and c.get('irrigation_shutoff', '') != '' %}{{ [c.irrigation_shutoff] }}
+                    {% else %}{{ c.get('irrigation', '').split(',') | map('trim') | select('ne', '') | list }}{% endif %}
+              - repeat:
+                  for_each: "{{ targets }}"
+                  sequence:
+                    - action: "{{ 'valve.close_valve' if repeat.item.startswith('valve.') else 'homeassistant.turn_off' }}"
+                      target:
+                        entity_id: "{{ repeat.item }}"
           - conditions: "{{ trigger.id in ['trace', 'guard', 'heater'] }}"
             sequence:
               - variables:
