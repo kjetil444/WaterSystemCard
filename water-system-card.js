@@ -154,7 +154,7 @@ const MAINT = {
     fields: [{ key: "f_hours", type: "number", unit: "h" }, { key: "f_lamp", type: "text" }, { key: "f_sleeve", type: "bool" }] },
   filter: { entity: "input_datetime.water_last_filter_change", interval: "input_number.water_filter_interval_days", days: 180, icon: "mdi:filter-outline",
     fields: [{ key: "f_ftype", type: "text" }, { key: "f_pbefore", type: "number", q: "pressure" }] },
-  outdoor_tap: { entity: "input_datetime.water_last_outdoor_tap", interval: "input_number.water_outdoor_tap_interval_days", days: 182, icon: "mdi:water-pump-outline",
+  outdoor_tap: { entity: "input_datetime.water_last_outdoor_tap", interval: "input_number.water_outdoor_tap_interval_days", days: 182, icon: "mdi:faucet",
     fields: [{ key: "f_tapact", type: "select", options: ["a_winter", "a_summer"] }, { key: "f_drained", type: "bool" }, { key: "f_hose", type: "bool" }] },
   irrigation: { entity: "input_datetime.water_last_irrigation_service", interval: "input_number.water_irrigation_interval_days", days: 182, icon: "mdi:sprinkler-variant",
     fields: [{ key: "f_tapact", type: "select", options: ["a_winter", "a_summer"] }, { key: "f_blown", type: "bool" }, { key: "f_drainv", type: "bool" }, { key: "f_timer", type: "bool" }] },

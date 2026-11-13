@@ -4,6 +4,14 @@ A Home Assistant Lovelace card for a private water supply: well with submersible
 
 ![Preview](images/preview.png)
 
+| Normal | Alarms | Irrigation | Tank in the house (light theme) |
+|---|---|---|---|
+| ![Normal](images/card-normal.png) | ![Alarms](images/card-alarms.png) | ![Irrigation](images/card-irrigation.png) | ![House](images/card-house-light.png) |
+
+| Settings (⚙) | Maintenance form with guide |
+|---|---|
+| ![Settings](images/settings.png) | ![Maintenance](images/maintenance.png) |
+
 ## Features
 
 - Animated cutaway diagram: well, pump, pressure tank, manometer, valve, tap and water heater
