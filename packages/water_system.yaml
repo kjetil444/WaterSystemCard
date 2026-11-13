@@ -35,6 +35,13 @@ input_number:
     step: 0.1
     unit_of_measurement: bar
     icon: mdi:gauge-low
+  water_cut_out:
+    name: Water cut-out pressure
+    min: 0.5
+    max: 10
+    step: 0.1
+    unit_of_measurement: bar
+    icon: mdi:gauge-full
   water_pump_power_threshold:
     name: Water pump running above
     min: 5
@@ -123,6 +130,33 @@ input_number:
     step: 1
     unit_of_measurement: "°C"
     icon: mdi:water-thermometer-outline
+  water_hot_ok_temp:
+    name: Water hot water OK from
+    min: 30
+    max: 90
+    step: 1
+    unit_of_measurement: "°C"
+    icon: mdi:water-thermometer
+  water_heater_volume:
+    name: Water heater volume
+    min: 0
+    max: 1000
+    step: 10
+    unit_of_measurement: L
+    icon: mdi:water-boiler
+  water_tap_frost_temp:
+    name: Water outdoor tap frost warning below
+    min: -20
+    max: 10
+    step: 0.5
+    unit_of_measurement: "°C"
+    icon: mdi:water-pump-off
+  water_outdoor_tap_interval_days:
+    name: Water outdoor tap check interval
+    min: 30
+    max: 730
+    step: 1
+    unit_of_measurement: d
   water_legionella_temp:
     name: Water legionella temperature
     min: 55
@@ -203,6 +237,10 @@ input_datetime:
     name: Water last filter change
     has_date: true
     has_time: false
+  water_last_outdoor_tap:
+    name: Water last outdoor tap service
+    has_date: true
+    has_time: false
 
 # -------------------------------------------------------------------------------------
 # Template entities
@@ -229,6 +267,9 @@ template:
           water_meter_factor: "1"                          # 1 if meter is in L, 1000 if in m³
           hot_water_temp: "sensor.vvb_temp"
           water_heater: "switch.vvb"                       # switch.* or water_heater.*
+          outdoor_tap: ""                                  # valve/switch for the outdoor tap (open = water running). '' if none
+          outdoor_tap_shutoff: ""                          # indoor stop valve for the outdoor tap (open/on = water in the outdoor pipe)
+          irrigation: ""                                   # switch/binary_sensor – water use while it runs is not an away alarm
 
   # ---- pump state, alarms ----
   - binary_sensor:
@@ -364,8 +405,23 @@ template:
         state: >
           {% set c = states.sensor.water_system_config.attributes if states.sensor.water_system_config is not none else {} %}
           {% set f = c.get('flow', '') %}
-          {{ is_state('input_boolean.water_away', 'on') and
+          {% set irr = c.get('irrigation', '') %}
+          {% set tap = c.get('outdoor_tap', '') %}
+          {% set excused = (irr != '' and states(irr) in ['on', 'open']) or (tap != '' and states(tap) in ['on', 'open']) %}
+          {{ is_state('input_boolean.water_away', 'on') and not excused and
              (is_state('binary_sensor.water_pump_running', 'on') or (f != '' and states(f) | float(0) > 0.1)) }}
+
+      - name: Water outdoor tap frost
+        unique_id: water_outdoor_tap_frost
+        device_class: problem
+        icon: mdi:water-pump-off
+        state: >
+          {% set c = states.sensor.water_system_config.attributes if states.sensor.water_system_config is not none else {} %}
+          {% set tap = c.get('outdoor_tap', '') %}
+          {% set sh = c.get('outdoor_tap_shutoff', '') %}
+          {% set t = states(c.get('outdoor_temp', '')) | float(99) %}
+          {% set live = (tap != '' and states(tap) in ['on', 'open']) or (sh != '' and states(sh) in ['on', 'open']) %}
+          {{ (tap != '' or sh != '') and live and t < states('input_number.water_tap_frost_temp') | float(0) }}
 
       - name: Water tank precharge low
         unique_id: water_tank_precharge_low
@@ -397,7 +453,8 @@ template:
                ('water_last_precharge_check', 'water_precharge_interval_days', 'Fortrykk i tanken'),
                ('water_last_water_sample', 'water_sample_interval_days', 'Vannprøve'),
                ('water_last_uv_lamp', 'water_uv_interval_days', 'UV-lampe'),
-               ('water_last_filter_change', 'water_filter_interval_days', 'Filter')] %}
+               ('water_last_filter_change', 'water_filter_interval_days', 'Filter'),
+                 ('water_last_outdoor_tap', 'water_outdoor_tap_interval_days', 'Utekran')] %}
             {% set d = states('input_datetime.' ~ key) %}
             {% if d not in ['unknown', 'unavailable', ''] and as_datetime(d) is not none %}
               {% if (now() - as_local(as_datetime(d))).days > states('input_number.' ~ interval) | int(365) %}
@@ -413,7 +470,8 @@ template:
                  ('water_last_precharge_check', 'water_precharge_interval_days', 'Fortrykk i tanken'),
                  ('water_last_water_sample', 'water_sample_interval_days', 'Vannprøve'),
                  ('water_last_uv_lamp', 'water_uv_interval_days', 'UV-lampe'),
-                 ('water_last_filter_change', 'water_filter_interval_days', 'Filter')] %}
+                 ('water_last_filter_change', 'water_filter_interval_days', 'Filter'),
+                 ('water_last_outdoor_tap', 'water_outdoor_tap_interval_days', 'Utekran')] %}
               {% set d = states('input_datetime.' ~ key) %}
               {% if d not in ['unknown', 'unavailable', ''] and as_datetime(d) is not none %}
                 {% if (now() - as_local(as_datetime(d))).days > states('input_number.' ~ interval) | int(365) %}
@@ -662,6 +720,21 @@ automation:
         target: {entity_id: input_number.water_cut_in}
         data: {value: 2.0}
       - action: input_number.set_value
+        target: {entity_id: input_number.water_cut_out}
+        data: {value: 3.5}
+      - action: input_number.set_value
+        target: {entity_id: input_number.water_hot_ok_temp}
+        data: {value: 60}
+      - action: input_number.set_value
+        target: {entity_id: input_number.water_heater_volume}
+        data: {value: 200}
+      - action: input_number.set_value
+        target: {entity_id: input_number.water_tap_frost_temp}
+        data: {value: 0}
+      - action: input_number.set_value
+        target: {entity_id: input_number.water_outdoor_tap_interval_days}
+        data: {value: 182}
+      - action: input_number.set_value
         target: {entity_id: input_number.water_pump_power_threshold}
         data: {value: 50}
       - action: input_number.set_value
@@ -783,6 +856,10 @@ automation:
         to: "on"
         id: legionella
       - trigger: state
+        entity_id: binary_sensor.water_outdoor_tap_frost
+        to: "on"
+        id: tap_frost
+      - trigger: state
         entity_id: binary_sensor.water_tank_precharge_low
         to: "on"
         id: precharge
@@ -805,6 +882,7 @@ automation:
         night: ["🌙 Pumpestarter i natt", "Pumpa startet {{ states('sensor.water_pump_starts_night') }} ganger i natt – sjekk toaletter og kraner.", false, []]
         hot_low: ["Lite varmtvann", "Varmtvannet er {{ states(state_attr('sensor.water_system_config', 'hot_water_temp')) }} °C.", false, [{"action": "WATER_HEATER_ON", "title": "Slå på bereder"}]]
         legionella: ["🦠 Legionella", "Varmtvannet har ikke vært over {{ states('input_number.water_legionella_temp') | int }} °C på {{ states('input_number.water_legionella_days') | int }} dager.", false, []]
+        tap_frost: ["❄️ Utekranen", "Det er {{ states(state_attr('sensor.water_system_config', 'outdoor_temp')) }} °C ute og utekranen er ikke stengt – fare for frostsprengning.", true, [{"action": "WATER_TAP_CLOSE", "title": "Steng utekran"}]]
         precharge: ["Trykktanken", "Tanken gir bare {{ states('sensor.water_tank_drawdown_avg') }} L per syklus – sjekk fortrykket.", false, []]
         wear: ["Pumpe-slitasje?", "Pumpesyklusene er lengre / strømtrekket høyere enn 30-dagerssnittet.", false, []]
       m: "{{ msgs[trigger.id] }}"
@@ -838,11 +916,26 @@ automation:
         event_type: mobile_app_notification_action
         event_data: {action: WATER_HEATER_ON}
         id: heater
+      - trigger: event
+        event_type: mobile_app_notification_action
+        event_data: {action: WATER_TAP_CLOSE}
+        id: tap
     actions:
       - choose:
           - conditions: "{{ trigger.id == 'close' }}"
             sequence:
               - action: script.water_close_valve
+          - conditions: "{{ trigger.id == 'tap' }}"
+            sequence:
+              - variables:
+                  t: >
+                    {% set c = states.sensor.water_system_config.attributes %}
+                    {{ c.get('outdoor_tap_shutoff', '') or c.get('outdoor_tap', '') }}
+              - condition: template
+                value_template: "{{ t not in [none, ''] }}"
+              - action: "{{ 'valve.close_valve' if t.startswith('valve.') else 'homeassistant.turn_off' }}"
+                target:
+                  entity_id: "{{ t }}"
           - conditions: "{{ trigger.id in ['trace', 'guard', 'heater'] }}"
             sequence:
               - variables:

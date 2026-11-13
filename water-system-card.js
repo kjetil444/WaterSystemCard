@@ -1,10 +1,10 @@
 /*
- * water-system-card  v1.8.0
+ * water-system-card  v1.9.0
  * Home Assistant custom Lovelace card: well → pump (with pump guard) → pressure tank → valve → house + water heater.
  * Self-contained, no HACS dependencies. Every entity is optional. Includes a visual editor.
  */
 
-const WSC_VERSION = "1.8.0";
+const WSC_VERSION = "1.9.0";
 const C = { water: "#38bdf8", ok: "#22c55e", warn: "#f59e0b", bad: "#ef4444", frost: "#60a5fa", heat: "#f97316", hot: "#f43f5e" };
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -57,6 +57,13 @@ const HELP = {
       "Sett inn ny patron av riktig type, skru huset på for hånd og åpne ventilene sakte.",
       "Luft ut ved å åpne en kran til vannet renner jevnt, og sjekk for lekkasje.",
     ],
+    outdoor_tap: [
+      "Høst (før frosten): steng stoppekranen for utekranen inne i huset.",
+      "Åpne utekranen og la den stå åpen så vannet renner ut av røret. La den gjerne stå åpen hele vinteren.",
+      "Koble fra hageslangen og tøm den – en tilkoblet slange kan holde vann i kranen og sprenge den.",
+      "Har du frostfri utekran, må slangen likevel kobles fra, ellers tømmer ikke kranen seg.",
+      "Vår (når frosten er over): steng utekranen, åpne stoppekranen inne og sjekk for lekkasje i veggen og inne.",
+    ],
   },
   en: {
     precharge: [
@@ -94,12 +101,19 @@ const HELP = {
       "Fit a new cartridge of the right type, screw the housing on by hand and open the valves slowly.",
       "Bleed air by opening a tap until the water runs smoothly, and check for leaks.",
     ],
+    outdoor_tap: [
+      "Autumn (before frost): close the indoor stop valve for the outdoor tap.",
+      "Open the outdoor tap so the pipe drains. It can stay open all winter.",
+      "Disconnect and empty the garden hose – a connected hose can keep water in the tap and burst it.",
+      "Even a frost-free tap needs the hose disconnected, or it can't drain.",
+      "Spring (when frost is over): close the outdoor tap, open the indoor stop valve and check for leaks inside the wall and indoors.",
+    ],
   },
 };
 const UNIT_DEC = { bar: 2, mbar: 0, kpa: 0, psi: 1, l: 0, gal: 1, "m³": 2, "l/min": 1, "gal/min": 1, "m³/h": 2, w: 0, kw: 2 };
 const UNIT_KEYS = {
   pressure: ["cut_in", "cut_out", "max_pressure", "low_pressure"],
-  temp: ["min_temp", "guard_warn_temp", "trace_warn_temp", "water_heater_low_temp", "water_heater_ok_temp", "legionella_temp", "cold_water_temp"],
+  temp: ["min_temp", "guard_warn_temp", "trace_warn_temp", "water_heater_low_temp", "water_heater_ok_temp", "legionella_temp", "cold_water_temp", "tap_frost_temp"],
   volume: ["water_heater_volume", "shower_liters", "drawdown_min"],
   power: ["power_threshold", "water_heater_power_threshold"],
 };
@@ -110,6 +124,7 @@ const PKG = {
   trace_off: "binary_sensor.water_heat_cable_off", night: "binary_sensor.water_night_activity", hot_low: "binary_sensor.water_hot_water_low",
   legionella: "binary_sensor.water_legionella_risk", leak: "binary_sensor.water_leak", away_alarm: "binary_sensor.water_away_alarm",
   precharge: "binary_sensor.water_tank_precharge_low", wear: "binary_sensor.water_pump_wear_trend", maint: "binary_sensor.water_maintenance_due",
+  tap_frost: "binary_sensor.water_outdoor_tap_frost",
 };
 const PKG_DEFAULTS = {
   away: "input_boolean.water_away", drawdown: "sensor.water_tank_drawdown_avg", drawdown_warn: PKG.precharge,
@@ -125,7 +140,29 @@ const MAINT = {
     fields: [{ key: "f_hours", type: "number", unit: "h" }, { key: "f_lamp", type: "text" }, { key: "f_sleeve", type: "bool" }] },
   filter: { entity: "input_datetime.water_last_filter_change", interval: "input_number.water_filter_interval_days", days: 180, icon: "mdi:filter-outline",
     fields: [{ key: "f_ftype", type: "text" }, { key: "f_pbefore", type: "number", q: "pressure" }] },
+  outdoor_tap: { entity: "input_datetime.water_last_outdoor_tap", interval: "input_number.water_outdoor_tap_interval_days", days: 182, icon: "mdi:water-pump-outline",
+    fields: [{ key: "f_tapact", type: "select", options: ["a_winter", "a_summer"] }, { key: "f_drained", type: "bool" }, { key: "f_hose", type: "bool" }] },
 };
+// helpers from the HA package that hold the card's settings (internal units: bar, °C, L, W, s, min, d)
+const HELPERS = {
+  cut_in: "input_number.water_cut_in", cut_out: "input_number.water_cut_out", power_threshold: "input_number.water_pump_power_threshold",
+  current_threshold: "input_number.water_pump_current_threshold", guard_delay: "input_number.water_guard_delay", max_run_minutes: "input_number.water_max_run_minutes",
+  short_cycle_seconds: "input_number.water_short_cycle_seconds", min_temp: "input_number.water_min_temp", guard_warn_temp: "input_number.water_guard_warn_temp",
+  trace_warn_temp: "input_number.water_trace_warn_temp", tap_frost_temp: "input_number.water_tap_frost_temp", night_start: "input_number.water_night_start",
+  night_end: "input_number.water_night_end", night_starts_warn: "input_number.water_night_starts_warn", water_heater_low_temp: "input_number.water_hot_low_temp",
+  water_heater_ok_temp: "input_number.water_hot_ok_temp", legionella_temp: "input_number.water_legionella_temp", legionella_days: "input_number.water_legionella_days",
+  water_heater_volume: "input_number.water_heater_volume", drawdown_min: "input_number.water_drawdown_min",
+};
+// settings panel: sections of [config key, quantity or fixed unit]; extra rows: helper-only numbers and switches
+const SETTINGS = [
+  ["set_pump", [["cut_in", "pressure"], ["cut_out", "pressure"], ["max_run_minutes", "min"], ["short_cycle_seconds", "s"], ["guard_delay", "s"], ["power_threshold", "power"], ["current_threshold", "A"]]],
+  ["set_frost", [["min_temp", "temp"], ["guard_warn_temp", "temp"], ["trace_warn_temp", "temp"], ["tap_frost_temp", "temp"],
+    ["@input_number.water_trace_auto_on_temp", "temp"], ["!input_boolean.water_auto_heat_cable"]]],
+  ["set_hot", [["@wh_target", "temp"], ["water_heater_low_temp", "temp"], ["water_heater_ok_temp", "temp"], ["legionella_temp", "temp"], ["legionella_days", "d"], ["water_heater_volume", "volume"]]],
+  ["set_night", [["night_start", "h"], ["night_end", "h"], ["night_starts_warn", ""], ["drawdown_min", "volume"]]],
+  ["set_maint", [["%precharge", "d"], ["%sample", "d"], ["%uv", "d"], ["%filter", "d"], ["%outdoor_tap", "d"]]],
+  ["set_auto", [["!input_boolean.water_notifications"], ["!input_boolean.water_away_close_valve"]]],
+];
 
 const DEFAULTS = {
   name: null,
@@ -178,6 +215,13 @@ const DEFAULTS = {
   cold_water_temp: 8,
   shower_liters: 60,
   drawdown_min: null,            // litres per cycle; warn below (if no package)
+  uv: null,                      // true or entity (switch/binary_sensor: lamp on) – draws a UV unit
+  filter: null,                  // true or entity (sensor, e.g. pressure drop) – draws a filter
+  outdoor_tap: null,             // true or entity (valve/switch) – draws an outdoor tap
+  outdoor_tap_shutoff: null,     // indoor stop valve for the outdoor tap (on/open = water in the outdoor pipe)
+  irrigation: null,              // switch/binary_sensor; water use while it runs is not a leak/away alarm
+  tap_frost_temp: 0,             // warn below this (outdoor) if the outdoor tap isn't shut off
+  interval_precharge: null, interval_sample: null, interval_uv: null, interval_filter: null, interval_outdoor_tap: null,
   language: null,
 };
 
@@ -196,6 +240,20 @@ const STRINGS = {
     t_hot_l: "Hot water", showers: "{v} showers", t_draw: "Per cycle", t_cyc: "Cycle 7 d / 30 d",
     ev: "Events", maint: "Maintenance", m_precharge: "Tank pre-charge", m_sample: "Water sample", m_uv: "UV lamp", m_filter: "Filter",
     due_in: "in {v} d", overdue: "{v} d overdue", never_done: "not logged", done: "Start", c_away: "Away", howto: "How to do it",
+    set_title: "Settings", set_pump: "Pump and pressure", set_frost: "Frost", set_hot: "Hot water", set_night: "Night and tank",
+    set_maint: "Maintenance intervals", set_auto: "Notifications and automation", set_none: "Install the HA package to change settings here. Until then, use the card editor.",
+    set_saved: "Saved", close: "Close", wh_target: "Water heater set point", tap_frost_temp: "Outdoor tap frost warning below",
+    cut_in: "Cut-in pressure", cut_out: "Cut-out pressure", max_run_minutes: "Max pump run time", short_cycle_seconds: "Short cycle below",
+    guard_delay: "Pump-stopped alarm after", power_threshold: "Pump running above", current_threshold: "Pump running above (current)",
+    min_temp: "Frost alarm (tank box) below", guard_warn_temp: "Frost guard off: warn below", trace_warn_temp: "Heat cable off: warn when outside below",
+    water_heater_low_temp: "Low hot water below", water_heater_ok_temp: "Hot water OK from", legionella_temp: "Legionella temperature",
+    legionella_days: "Must reach it every", water_heater_volume: "Water heater volume", night_start: "Night from", night_end: "Night to",
+    night_starts_warn: "Warn at night starts ≥", drawdown_min: "Warn if drawdown per cycle below",
+    "input_number.water_trace_auto_on_temp": "Heat cable auto on below", "input_boolean.water_auto_heat_cable": "Automatic heat cable",
+    "input_boolean.water_notifications": "Push notifications", "input_boolean.water_away_close_valve": "Close main valve when away",
+    m_outdoor_tap: "Outdoor tap", f_tapact: "Done", a_winter: "Winterized (closed and drained)", a_summer: "Opened for summer",
+    f_drained: "Pipe drained", f_hose: "Hose disconnected", b_tap_frost: "It's {v} outside and the outdoor tap isn't shut off – risk of a burst pipe.",
+    b_uv_off: "The UV lamp is off – the water isn't being disinfected.", t_uv: "UV lamp", t_filter: "Filter", c_tap: "Outdoor tap", c_irr: "Irrigation",
     dlg_title: "{v} – log", f_date: "Date", f_notes: "Notes", save: "Save as done", cancel: "Cancel", prev: "Previous entries",
     no_prev: "No previous entries.", need_num: "Enter a number", need_date: "Pick a date", no_log: "History isn't saved: add a Local To-do list (see README).",
     last: "Last", f_pre: "Measured pre-charge", f_cutin: "Cut-in pressure", f_cutout: "Cut-out pressure", f_adj: "Pre-charge adjusted to",
@@ -230,6 +288,20 @@ const STRINGS = {
     t_hot_l: "Varmtvann", showers: "{v} dusjer", t_draw: "Per syklus", t_cyc: "Syklus 7 d / 30 d",
     ev: "Hendelser", maint: "Vedlikehold", m_precharge: "Fortrykk i tanken", m_sample: "Vannprøve", m_uv: "UV-lampe", m_filter: "Filter",
     due_in: "om {v} d", overdue: "forfalt {v} d", never_done: "ikke registrert", done: "Utfør", c_away: "Borte", howto: "Slik gjør du det",
+    set_title: "Innstillinger", set_pump: "Pumpe og trykk", set_frost: "Frost", set_hot: "Varmtvann", set_night: "Natt og tank",
+    set_maint: "Vedlikeholdsintervaller", set_auto: "Varsler og automatikk", set_none: "Installer HA-pakken for å endre innstillinger her. Inntil da kan du bruke kort-editoren.",
+    set_saved: "Lagret", close: "Lukk", wh_target: "Berederens innstilte temperatur", tap_frost_temp: "Utekran: frostvarsel under",
+    cut_in: "Innkoblingstrykk", cut_out: "Utkoblingstrykk", max_run_minutes: "Maks gangtid for pumpa", short_cycle_seconds: "Kort syklus under",
+    guard_delay: "Alarm for stoppet pumpe etter", power_threshold: "Pumpa går over", current_threshold: "Pumpa går over (strøm)",
+    min_temp: "Frostalarm (tankkasse) under", guard_warn_temp: "Frostvakt av: varsle under", trace_warn_temp: "Varmekabel av: varsle når ute under",
+    water_heater_low_temp: "Lite varmtvann under", water_heater_ok_temp: "Varmtvann OK fra", legionella_temp: "Legionellatemperatur",
+    legionella_days: "Må nås minst hver", water_heater_volume: "Berederens volum", night_start: "Natt fra kl.", night_end: "Natt til kl.",
+    night_starts_warn: "Varsle ved nattstarter ≥", drawdown_min: "Varsle hvis uttak per syklus under",
+    "input_number.water_trace_auto_on_temp": "Varmekabel automatisk på under", "input_boolean.water_auto_heat_cable": "Automatisk varmekabel",
+    "input_boolean.water_notifications": "Push-varsler", "input_boolean.water_away_close_valve": "Steng hovedkran når borte",
+    m_outdoor_tap: "Utekran", f_tapact: "Utført", a_winter: "Vinterklargjort (stengt og tømt)", a_summer: "Åpnet for sommeren",
+    f_drained: "Røret tømt", f_hose: "Slangen koblet fra", b_tap_frost: "Det er {v} ute og utekranen er ikke stengt – fare for frostsprengning.",
+    b_uv_off: "UV-lampen er av – vannet blir ikke desinfisert.", t_uv: "UV-lampe", t_filter: "Filter", c_tap: "Utekran", c_irr: "Hagevanning",
     dlg_title: "{v} – registrer", f_date: "Dato", f_notes: "Notat", save: "Lagre som utført", cancel: "Avbryt", prev: "Tidligere registreringer",
     no_prev: "Ingen tidligere registreringer.", need_num: "Skriv inn et tall", need_date: "Velg en dato", no_log: "Historikk lagres ikke: legg til en Local To-do-liste (se README).",
     last: "Sist", f_pre: "Målt fortrykk", f_cutin: "Innkoblingstrykk", f_cutout: "Utkoblingstrykk", f_adj: "Fortrykk justert til",
@@ -306,6 +378,13 @@ svg.diagram .whv { font-size:17px; font-weight:700; fill:#fff; stroke:rgba(0,0,0
 .trace.on { stroke:${C.heat}; stroke-dasharray:none; stroke-width:3; filter:drop-shadow(0 0 3px ${C.heat}); }
 .trace.warn { stroke:${C.frost}; }
 #wh .glow { transition:opacity .3s; }
+#uv .uvglow { opacity:0; transition:opacity .3s; }
+#uv.on .uvglow { opacity:.35; animation:hglow 2s ease-in-out infinite; }
+#uv .uvtube { opacity:.25; }
+#uv.on .uvtube { opacity:1; }
+#otap .spray, #otap .tapwarn { display:none; }
+#otap.open .spray { display:inline; animation:lkdrop .7s ease-in infinite; --dy:6px; }
+#otap.frost .tapwarn { display:inline; animation:lkring 1s ease-in-out infinite; }
 #lvl { transition:transform .8s ease; }
 #wh .glow { opacity:0; }
 #wh.heating .glow { animation:hglow 1.6s ease-in-out infinite; }
@@ -320,6 +399,15 @@ svg.diagram .whv { font-size:17px; font-weight:700; fill:#fff; stroke:rgba(0,0,0
 .tile .val small { font-size:12px; font-weight:500; color:var(--secondary-text-color); margin-left:3px; }
 
 .head[data-toggle] { cursor:pointer; }
+.head .gear { --mdc-icon-size:22px; color:var(--secondary-text-color); cursor:pointer; padding:4px; border-radius:50%; }
+.head .gear:hover { background:color-mix(in srgb, var(--primary-text-color) 8%, transparent); }
+.dl h3 { margin:16px 0 4px; font-size:11px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--secondary-text-color); }
+.dl .srow { display:flex; align-items:center; gap:10px; padding:6px 0; font-size:14px; }
+.dl .srow span { flex:1; min-width:0; }
+.dl .srow input[type=text] { flex:0 0 84px; width:84px; text-align:right; padding:8px 10px; }
+.dl .srow small { min-width:42px; color:var(--secondary-text-color); }
+.dl .srow input[type=checkbox] { width:22px; height:22px; flex:none; }
+.dl .srow.ok input { border-color:${C.ok}; }
 .head .chev { --mdc-icon-size:20px; color:var(--secondary-text-color); transition:transform .2s; }
 .head .chev.open { transform:rotate(180deg); }
 .evl .ev, .mt { display:flex; align-items:center; gap:10px; padding:6px 0; font-size:13px; --mdc-icon-size:18px; }
@@ -433,8 +521,10 @@ class WaterSystemCard extends HTMLElement {
     off("show_water_heater", ["water_heater", "water_heater_temp", "water_heater_power", "water_heater_energy"]);
     off("show_leak", ["leak", ...LEAK_LOCS.map((l) => `leak_${l}`)]);
     off("show_outdoor", ["outdoor_temp"]);
+    ["uv", "filter", "outdoor_tap"].forEach((k) => { if (cfg[`has_${k}`] && !cfg[k]) cfg[k] = cfg[`${k}_entity`] || true; if (cfg[`has_${k}`] === false) cfg[k] = null; });
     if (cfg.use_package) Object.entries(PKG_DEFAULTS).forEach(([k, v]) => { if (cfg[k] === undefined) cfg[k] = v; });
-    if (cfg.use_package && cfg.maintenance === undefined) cfg.maintenance = ["precharge", "sample"];
+    if (cfg.use_package && cfg.maintenance === undefined)
+      cfg.maintenance = ["precharge", "sample", ...(cfg.uv ? ["uv"] : []), ...(cfg.filter ? ["filter"] : []), ...(cfg.outdoor_tap ? ["outdoor_tap"] : [])];
     this._config = cfg;
     this._sig = "";
     this._hist = null;
@@ -460,6 +550,7 @@ class WaterSystemCard extends HTMLElement {
     const lang = String(this._config.language || (hass.locale && hass.locale.language) || hass.language || "en");
     if (this._built && lang !== this._lang) this._built = false;
     this._lang = lang;
+    if (this._config.use_package && this._syncHelpers()) this._built = false;
     if (!this._built) this._build();
     const sig = this._ids().map((id) => { const s = hass.states[id]; return s ? s.state + (s.attributes.current_temperature ?? "") : "x"; }).join("|");
     if (sig !== this._sig) { this._sig = sig; this._update(); }
@@ -477,6 +568,19 @@ class WaterSystemCard extends HTMLElement {
     let out = v === undefined ? s : s.replace("{v}", v);
     return d === undefined ? out : out.replace("{d}", d);
   }
+  // read thresholds from the package's helpers; returns true when something that is drawn (gauge zones) changed
+  _syncHelpers() {
+    let redraw = false;
+    Object.entries(HELPERS).forEach(([k, id]) => {
+      if (this._raw && this._raw[k] !== undefined && !this._config.use_package) return;
+      const v = this._num(id);
+      if (v == null || v === this._config[k]) return;
+      if (["cut_in", "cut_out"].includes(k)) redraw = true;
+      this._config[k] = v;
+    });
+    return redraw;
+  }
+
   _leaks() {
     const c = this._config, out = [];
     const add = (x, loc) => {
@@ -494,7 +598,9 @@ class WaterSystemCard extends HTMLElement {
     const ids = [c.pressure, c.pump_power, c.pump_current, c.pump_switch, c.pump_running, c.pump_guard, c.valve, c.temperature, c.heat_trace, c.frost_guard, c.outdoor_temp,
       c.flow, c.water_today, c.well_level, c.water_heater, c.water_heater_temp, c.water_heater_power, c.water_heater_energy, ...this._leakIds()];
     (c.buttons || []).forEach((b) => ids.push(b.entity));
-    ids.push(c.away, c.drawdown, c.drawdown_warn, c.cycle_avg_7d, c.cycle_avg_30d, c.pump_trend);
+    ids.push(c.away, c.drawdown, c.drawdown_warn, c.cycle_avg_7d, c.cycle_avg_30d, c.pump_trend, c.outdoor_tap_shutoff, c.irrigation);
+    ["uv", "filter", "outdoor_tap"].forEach((k) => { if (typeof c[k] === "string") ids.push(c[k]); });
+    if (c.use_package) ids.push(...Object.values(HELPERS));
     if (c.use_package) ids.push(...Object.values(PKG), "sensor.water_pump_starts_night");
     this._maintItems().forEach((m) => ids.push(m.entity, m.interval));
     return ids.filter(Boolean);
@@ -560,6 +666,7 @@ class WaterSystemCard extends HTMLElement {
 
   // ---------- events ----------
   _onClick(ev) {
+    if (ev.target.closest("[data-settings]")) { this._openSettings(); return; }
     const dl = ev.target.closest("[data-dlg]");
     if (dl) { if (dl.dataset.dlg === "save") this._saveMaint(); else this._closeDlg(); return; }
     if (ev.target.id === "mdlg") { this._closeDlg(); return; }        // click on the backdrop
@@ -775,7 +882,13 @@ class WaterSystemCard extends HTMLElement {
 
     // away mode, tank health, pump wear, hot water litres
     m.away = c.away ? this._isOn(c.away) : false;
-    m.awayAlarm = m.away && (m.flowing || m.running === true);
+    const ent = (k) => (typeof c[k] === "string" ? c[k] : null);
+    m.uvOn = ent("uv") && /^(switch|binary_sensor|input_boolean|light)\./.test(c.uv) ? this._isOn(c.uv) : c.uv ? true : null;
+    m.tapOpen = ent("outdoor_tap") ? this._isOn(c.outdoor_tap) : false;
+    m.irrigating = c.irrigation ? this._isOn(c.irrigation) : false;
+    m.tapLive = c.outdoor_tap_shutoff ? this._isOn(c.outdoor_tap_shutoff) : null;   // water in the outdoor pipe
+    m.tapFrost = !!c.outdoor_tap && m.outT != null && m.outT < c.tap_frost_temp && (m.tapOpen || m.tapLive === true);
+    m.awayAlarm = m.away && (m.flowing || m.running === true) && !m.tapOpen && !m.irrigating;
     m.drawdown = this._canon(c.drawdown, "volume");
     m.precharge = c.drawdown_warn ? this._isOn(c.drawdown_warn) : c.drawdown_min != null && m.drawdown != null && m.drawdown < c.drawdown_min;
     m.cyc7 = this._num(c.cycle_avg_7d);
@@ -806,6 +919,7 @@ class WaterSystemCard extends HTMLElement {
       m.traceWarn = pk("trace_off", m.traceWarn);
       m.lowPressure = pk("low_pressure", m.lowPressure);
       m.awayAlarm = pk("away_alarm", m.awayAlarm);
+      m.tapFrost = pk("tap_frost", m.tapFrost);
       if (m.stats) {
         m.stats.longRun = pk("long_run", m.stats.longRun);
         m.stats.shortCycle = pk("short_cycle", m.stats.shortCycle);
@@ -836,13 +950,18 @@ class WaterSystemCard extends HTMLElement {
 
   // ---------- build (once per config) ----------
   _build() {
-    this.shadowRoot.innerHTML = `<style>${STYLE}</style><ha-card>
+    // the dialog lives outside ha-card so a redraw (e.g. new cut-in pressure) doesn't close an open form
+    if (!this.shadowRoot.getElementById("hc")) this.shadowRoot.innerHTML = `<style>${STYLE}</style><ha-card id="hc"></ha-card><dialog class="mdlg" id="mdlg"></dialog>`;
+    this.shadowRoot.getElementById("hc").innerHTML = `
       <div id="head"></div><div id="banners"></div>${this._diagramTpl()}
-      <div id="tiles"></div><div id="stats"></div><div id="extra"></div><div id="ctrls"></div></ha-card>
-      <dialog class="mdlg" id="mdlg"></dialog>`;
+      <div id="tiles"></div><div id="stats"></div><div id="extra"></div><div id="ctrls"></div>`;
     const $ = (id) => this.shadowRoot.getElementById(id);
     this._el = { head: $("head"), banners: $("banners"), tiles: $("tiles"), stats: $("stats"), extra: $("extra"), ctrls: $("ctrls") };
-    if (!this._clickBound) { this.shadowRoot.addEventListener("click", (ev) => this._onClick(ev)); this._clickBound = true; }
+    if (!this._clickBound) {
+      this.shadowRoot.addEventListener("click", (ev) => this._onClick(ev));
+      this.shadowRoot.addEventListener("change", (ev) => this._onChange(ev));
+      this._clickBound = true;
+    }
     this._built = true;
   }
 
@@ -973,7 +1092,7 @@ class WaterSystemCard extends HTMLElement {
         <text x="${cx}" y="121" text-anchor="middle" style="font-size:12px">${esc(c.pressure_unit)}</text>
       </g>
 
-      ${c.valve ? `<g id="valve" ${info(c.valve)} transform="translate(${inHouse ? 300 : 478},130)" style="--vc:${C.ok}">
+      ${c.valve ? `<g id="valve" ${info(c.valve)} transform="translate(${inHouse ? 300 : 466},130)" style="--vc:${C.ok}">
         <path d="M-11,-10 L11,10 L11,-10 L-11,10 Z" style="fill:var(--vc)"/>
         <line x1="0" y1="0" x2="0" y2="-18" style="stroke:var(--vc)" stroke-width="3"/>
         <rect x="-8" y="-22" width="16" height="5" rx="2.5" style="fill:var(--vc)"/>
@@ -984,8 +1103,25 @@ class WaterSystemCard extends HTMLElement {
         <rect x="508" y="60" width="8" height="17" rx="3" fill="${fixture}"/>
         <path class="drip" d="M512,80 c-3,4 -4,6 -4,7.5 a4,4 0 0 0 8,0 c0,-1.5 -1,-3.5 -4,-7.5 z" fill="${C.water}"/>
         <path d="M490,94 h44 v4 a12,12 0 0 1 -12,12 h-20 a12,12 0 0 1 -12,-12 z" fill="${fixture}" opacity=".7"/>
-        <rect x="508" y="110" width="8" height="60" fill="${fixture}" opacity=".35"/>
       </g>
+      ${c.filter ? `<g id="filt" ${info(typeof c.filter === "string" ? c.filter : null)}>
+        <rect x="481" y="124" width="18" height="6" rx="2" fill="${fixture}"/>
+        <rect x="483" y="130" width="14" height="30" rx="5" fill="url(#metal)" stroke="${muted}" stroke-width="2"/>
+        <path d="M486,136 h8 M486,141 h8 M486,146 h8 M486,151 h8" stroke="${muted}" stroke-width="1.5"/>
+      </g>` : ""}
+      ${c.uv ? `<g id="uv" ${info(typeof c.uv === "string" ? c.uv : null)}>
+        <rect class="uvglow" x="501" y="118" width="38" height="24" rx="10" fill="#a78bfa"/>
+        <rect x="504" y="121" width="32" height="18" rx="8" fill="url(#metal)" stroke="${muted}" stroke-width="2"/>
+        <rect class="uvtube" x="508" y="127" width="24" height="6" rx="3" fill="#a78bfa"/>
+      </g>` : ""}
+      ${c.outdoor_tap ? `<g id="otap" ${info(typeof c.outdoor_tap === "string" ? c.outdoor_tap : c.outdoor_tap_shutoff)}>
+        <path class="pipe-base" d="M${inHouse ? 160 : 452},150 H${inHouse ? 148 : 440}" style="stroke-width:6"/>
+        <rect x="${inHouse ? 136 : 428}" y="144" width="14" height="10" rx="3" fill="${fixture}"/>
+        <rect x="${inHouse ? 136 : 428}" y="148" width="6" height="12" rx="2" fill="${fixture}"/>
+        <rect x="${inHouse ? 140 : 432}" y="138" width="8" height="5" rx="2" fill="${fixture}"/>
+        <path class="spray" d="M${inHouse ? 139 : 431},164 l-2,5 M${inHouse ? 139 : 431},164 l0,6 M${inHouse ? 139 : 431},164 l2,5" stroke="${C.water}" stroke-width="2" stroke-linecap="round"/>
+        <circle class="tapwarn" cx="${inHouse ? 139 : 431}" cy="151" r="15" fill="none" stroke="${C.frost}" stroke-width="2.5"/>
+      </g>` : ""}
       ${hasWh ? `
       <g id="wh" ${info(c.water_heater || c.water_heater_temp || c.water_heater_power)}>
         <rect class="glow" x="576" y="74" width="48" height="98" rx="18" fill="${C.hot}"/>
@@ -1010,6 +1146,7 @@ class WaterSystemCard extends HTMLElement {
         <div class="ico"><ha-icon icon="mdi:water-pump"></ha-icon></div>
         <div class="title"><b>${esc(c.name || this._t("title"))}</b><span>${esc(this._t("sub"))}</span></div>
         <div class="chip ${m.status.pulse ? "pulse" : ""}" style="--c:${m.status.c}"><i></i>${esc(m.status.t)}</div>
+        ${this._hasSettings() ? `<ha-icon class="gear" data-settings="1" icon="mdi:cog-outline"></ha-icon>` : ""}
         ${c.compact ? `<ha-icon class="chev ${this._expanded ? "open" : ""}" icon="mdi:chevron-down"></ha-icon>` : ""}
       </div>`);
     const full = !c.compact || this._expanded;
@@ -1031,6 +1168,8 @@ class WaterSystemCard extends HTMLElement {
       b(C.bad, "mdi:water-alert", this._t("b_leak_at", names.join(", ")));
     }
     if (m.awayAlarm) b(C.bad, "mdi:home-alert", this._t("b_away_alarm"));
+    if (m.tapFrost) b(C.frost, "mdi:water-pump-off", this._t("b_tap_frost", this._fv(m.outT, "temp")));
+    if (m.uvOn === false) b(C.warn, "mdi:lightbulb-alert-outline", this._t("b_uv_off"));
     if (m.guard) b(C.bad, "mdi:engine-off", this._t("b_guard"));
     if (m.stats && m.stats.longRun) b(C.bad, "mdi:timer-alert", this._t("b_long", this._dur(m.stats.runFor, false)));
     if (m.frost) b(C.frost, "mdi:snowflake-alert", this._t("b_frost", tu(m.temp, c.temperature)) + (m.guardOn === false ? this._t("b_frost_off") : m.guardOn ? this._t("b_frost_weak") : ""));
@@ -1081,6 +1220,8 @@ class WaterSystemCard extends HTMLElement {
       q("ttemp").style.fill = m.frost ? C.frost : "";
     }
     q("fguard").style.display = m.guardOn ? "" : "none";
+    if (q("uv")) q("uv").classList.toggle("on", m.uvOn !== false);
+    if (q("otap")) { q("otap").classList.toggle("open", m.tapOpen || m.irrigating); q("otap").classList.toggle("frost", m.tapFrost); }
     if (q("box")) q("box").style.stroke = m.frost || m.guardWarn ? C.frost : m.guardOn ? C.heat : "";
     if (q("htrace")) {
       q("htrace").classList.toggle("on", !!m.traceOn);
@@ -1123,6 +1264,8 @@ class WaterSystemCard extends HTMLElement {
       }
     }
     if (m.wh && m.wh.litres != null) add(c.water_heater_temp || c.water_heater, "mdi:shower-head", this._t("t_hot_l"), `≈${this._fq(m.wh.litres, "volume", 0)}`, ` ${this._du("volume")} · ${this._t("showers", m.wh.showers)}`, m.wh.low ? C.frost : C.hot);
+    if (typeof c.uv === "string" && /^sensor\./.test(c.uv)) add(c.uv, "mdi:lightbulb-fluorescent-tube-outline", this._t("t_uv"), this._fmt(this._num(c.uv), 0), this._unit(c.uv), null);
+    if (typeof c.filter === "string" && /^sensor\./.test(c.filter)) add(c.filter, "mdi:filter-outline", this._t("t_filter"), this._fmt(this._num(c.filter), 2), this._unit(c.filter), null);
     if (c.drawdown) add(c.drawdown, "mdi:car-coolant-level", this._t("t_draw"), this._fq(m.drawdown, "volume"), this._du("volume"), m.precharge ? C.warn : C.ok);
     if (c.cycle_avg_7d) add(c.cycle_avg_7d, "mdi:chart-timeline-variant", this._t("t_cyc"), `${this._fmt(m.cyc7, 0)}/${this._fmt(m.cyc30, 0)}`, "s", m.wear ? C.warn : null);
     return out.length ? `<div class="tiles">${out.join("")}</div>` : "";
@@ -1132,7 +1275,7 @@ class WaterSystemCard extends HTMLElement {
     const c = this._config, list = c.maintenance;
     if (!list) return [];
     return (Array.isArray(list) ? list : [list]).map((x) => {
-      if (typeof x === "string") { const d = MAINT[x]; return d ? { key: x, name: this._t(`m_${x}`), ...d } : null; }
+      if (typeof x === "string") { const d = MAINT[x]; return d ? { key: x, name: this._t(`m_${x}`), ...d, days: c[`interval_${x}`] ?? d.days } : null; }
       return x && (x.entity || x.name) ? { key: x.key || x.entity || x.name, name: x.name || x.entity, icon: x.icon || "mdi:wrench", entity: x.entity, interval: x.interval_entity,
         days: x.interval_days || 365, help: x.help, fields: (x.fields || []).map((f) => (typeof f === "string" ? { key: f, label: f, type: "text" } : { type: "text", ...f, key: f.key || f.label })) } : null;
     }).filter(Boolean);
@@ -1167,7 +1310,7 @@ class WaterSystemCard extends HTMLElement {
     } catch (e) { this._logItems = null; }
     this._logBusy = false;
     this._update();
-    if (this._dlgKey) this._renderDlg();
+    if (this._dlgKey && this._dlgKey !== "__settings") this._renderDlg();
   }
 
   // entries for one maintenance item, newest first: { t, date, lines[] }
@@ -1178,6 +1321,87 @@ class WaterSystemCard extends HTMLElement {
       const date = x.due || (x.summary.slice(pre.length).match(/\d{4}-\d{2}-\d{2}/) || [])[0] || "";
       return { t: new Date(date).getTime() || 0, date, lines: (x.description || "").split("\n").filter(Boolean) };
     }).sort((a, b) => b.t - a.t);
+  }
+
+  // ---------- settings panel (values live in the package's helpers) ----------
+  _setRows() {
+    const c = this._config, rows = [];
+    const whEnt = c.water_heater && /^(water_heater|climate)\./.test(c.water_heater) ? c.water_heater : null;
+    SETTINGS.forEach(([sec, items]) => {
+      const list = [];
+      items.forEach(([key, u]) => {
+        if (key.startsWith("!")) { const id = key.slice(1); if (this._st(id)) list.push({ kind: "bool", id, label: this._t(id) }); return; }
+        if (key === "@wh_target") { if (whEnt && this._st(whEnt).attributes.temperature != null) list.push({ kind: "wh", id: whEnt, label: this._t("wh_target"), q: "temp" }); return; }
+        if (key.startsWith("@")) { const id = key.slice(1); if (this._st(id)) list.push({ kind: "num", id, label: this._t(id), q: u }); return; }
+        if (key.startsWith("%")) {
+          const it = this._maintItems().find((x) => x.key === key.slice(1));
+          if (it && it.interval && this._st(it.interval)) list.push({ kind: "num", id: it.interval, label: it.name, q: u });
+          return;
+        }
+        const id = HELPERS[key];
+        if (id && this._st(id)) list.push({ kind: "num", id, label: this._t(key), q: u });
+      });
+      if (list.length) rows.push([sec, list]);
+    });
+    return rows;
+  }
+
+  _hasSettings() { return this._config.use_package || (this._config.water_heater && /^(water_heater|climate)\./.test(this._config.water_heater)); }
+
+  _openSettings() {
+    this._dlgKey = "__settings";
+    this._setOk = {};
+    const d = this.shadowRoot.getElementById("mdlg");
+    if (!d) return;
+    d.innerHTML = "";
+    this._renderSettings();
+    if (!d.open) { try { d.showModal(); } catch (e) { d.setAttribute("open", ""); } }
+  }
+
+  _renderSettings() {
+    const d = this.shadowRoot.getElementById("mdlg");
+    if (!d) return;
+    const units = { pressure: 1, temp: 1, volume: 1, power: 1 };
+    const rows = this._setRows();
+    const row = (r) => {
+      const s = this._st(r.id);
+      if (r.kind === "bool") return `<label class="srow"><span>${esc(r.label)}</span><input type="checkbox" data-set="${esc(r.id)}" data-kind="bool" ${s.state === "on" ? "checked" : ""}></label>`;
+      const raw = r.kind === "wh" ? Number(s.attributes.temperature) : Number(s.state);
+      const haF = /f/i.test(((this._hass.config || {}).unit_system || {}).temperature || "");
+      const canon = r.kind === "wh" && haF ? ((raw - 32) * 5) / 9 : raw;
+      const shown = units[r.q] ? this._fq(canon, r.q, r.q === "pressure" ? 1 : r.q === "temp" ? 1 : undefined) : this._fmt(canon, Number.isInteger(canon) ? 0 : 1);
+      const unit = units[r.q] ? this._du(r.q) : r.q;
+      return `<label class="srow ${this._setOk[r.id] ? "ok" : ""}"><span>${esc(r.label)}</span><input type="text" inputmode="decimal" data-set="${esc(r.id)}" data-kind="${r.kind}" data-q="${esc(r.q)}" value="${esc(shown)}"><small>${esc(unit)}</small></label>`;
+    };
+    d.innerHTML = `<div class="dl">
+      <header><ha-icon icon="mdi:cog-outline"></ha-icon>${esc(this._t("set_title"))}</header>
+      <div class="body">${rows.length ? rows.map(([sec, list]) => `<h3>${esc(this._t(sec))}</h3>${list.map(row).join("")}`).join("") : `<div class="hint">${esc(this._t("set_none"))}</div>`}</div>
+      <footer><button class="pri" data-dlg="cancel">${esc(this._t("close"))}</button></footer>
+    </div>`;
+  }
+
+  _onChange(ev) {
+    const el = ev.target.closest("[data-set]");
+    if (!el || !this._hass) return;
+    const id = el.dataset.set;
+    if (el.dataset.kind === "bool") { this._hass.callService("input_boolean", el.checked ? "turn_on" : "turn_off", { entity_id: id }); return; }
+    const v = Number(String(el.value).replace(",", "."));
+    if (!isFinite(v)) { el.value = ""; return; }
+    const q = el.dataset.q;
+    // display unit → internal unit
+    let canon = v;
+    if (q === "temp") canon = this._tU === "°F" ? ((v - 32) * 5) / 9 : v;
+    else if (UNITS[q]) canon = v * (UNITS[q][String(this._du(q)).toLowerCase()] ?? 1);
+    if (el.dataset.kind === "wh") {
+      const haF = /f/i.test(((this._hass.config || {}).unit_system || {}).temperature || "");
+      this._hass.callService(id.split(".")[0], "set_temperature", { entity_id: id, temperature: Math.round((haF ? (canon * 9) / 5 + 32 : canon) * 2) / 2 });
+    } else {
+      const a = this._st(id).attributes || {};
+      const val = Math.min(a.max ?? Infinity, Math.max(a.min ?? -Infinity, Math.round(canon * 1000) / 1000));
+      this._hass.callService("input_number", "set_value", { entity_id: id, value: val });
+    }
+    this._setOk[id] = true;
+    el.closest(".srow").classList.add("ok");
   }
 
   _openMaint(key) {
@@ -1392,6 +1616,9 @@ class WaterSystemCard extends HTMLElement {
     };
     mk(c.pump_switch, this._t("c_pump"), "mdi:water-pump", "mdi:water-pump-off", { key: "pump", col: C.water });
     mk(c.valve, this._t("c_valve"), "mdi:valve-open", "mdi:valve-closed", { key: "valve", offBad: true, col: C.ok, valve: true });
+    if (typeof c.outdoor_tap === "string") mk(c.outdoor_tap, this._t("c_tap"), "mdi:water-pump", "mdi:water-pump-off", { col: C.water, valve: /^valve\./.test(c.outdoor_tap) });
+    if (c.outdoor_tap_shutoff) mk(c.outdoor_tap_shutoff, `${this._t("c_tap")} (${this._t("c_valve").toLowerCase()})`, "mdi:valve-open", "mdi:valve-closed", { col: C.water, valve: true });
+    if (c.irrigation) mk(c.irrigation, this._t("c_irr"), "mdi:sprinkler-variant", "mdi:sprinkler-variant", { col: C.ok });
     mk(c.away, this._t("c_away"), "mdi:home-export-outline", "mdi:home-outline", { col: "#a78bfa" });
     mk(c.frost_guard, this._t("c_guard"), "mdi:radiator", "mdi:radiator-off", { key: "frost_guard", col: C.heat });
     mk(c.heat_trace, this._t("c_trace"), "mdi:heating-coil", "mdi:heating-coil", { key: "heat_trace", col: C.heat, offBad: m.traceWarn });
@@ -1441,7 +1668,7 @@ const EDITOR_SCHEMA = [
     { name: "maintenance_log", selector: ent("todo") },
     { name: "maintenance", selector: { select: { multiple: true, mode: "list", options: [
       { value: "precharge", label: "Tank pre-charge check" }, { value: "sample", label: "Water sample" },
-      { value: "uv", label: "UV lamp" }, { value: "filter", label: "Filter change" }] } } },
+      { value: "uv", label: "UV lamp" }, { value: "filter", label: "Filter change" }, { value: "outdoor_tap", label: "Outdoor tap (winter/summer)" }] } } },
   ] },
   { type: "expandable", name: "", title: "Features (show / hide)", flatten: true, schema: [
     { type: "grid", name: "", schema: [
@@ -1474,6 +1701,22 @@ const EDITOR_SCHEMA = [
     { name: "leak_heater", selector: ent("binary_sensor", { multiple: true }) },
     { name: "leak_well", selector: ent("binary_sensor", { multiple: true }) },
     { name: "leak_pipe", selector: ent("binary_sensor", { multiple: true }) },
+  ] },
+  { type: "expandable", name: "", title: "UV, filter and outdoor tap", flatten: true, schema: [
+    { type: "grid", name: "", schema: [bool("has_uv"), bool("has_filter"), bool("has_outdoor_tap")] },
+    { name: "uv_entity", selector: ent(["switch", "binary_sensor", "sensor", "light"]) },
+    { name: "filter_entity", selector: ent("sensor") },
+    { name: "outdoor_tap_entity", selector: ent(["valve", "switch"]) },
+    { name: "outdoor_tap_shutoff", selector: ent(["valve", "switch", "input_boolean"]) },
+    { name: "irrigation", selector: ent(["switch", "binary_sensor", "valve"]) },
+    { name: "tap_frost_temp", selector: num("°C", -20, 10, 0.5) },
+  ] },
+  { type: "expandable", name: "", title: "Maintenance intervals (if not using the HA package)", flatten: true, schema: [
+    { type: "grid", name: "", schema: [
+      { name: "interval_precharge", selector: num("d", 30, 1095, 1) }, { name: "interval_sample", selector: num("d", 30, 3650, 1) },
+      { name: "interval_uv", selector: num("d", 30, 1095, 1) }, { name: "interval_filter", selector: num("d", 14, 730, 1) },
+      { name: "interval_outdoor_tap", selector: num("d", 30, 730, 1) },
+    ] },
   ] },
   { type: "expandable", name: "", title: "Water heater", flatten: true, schema: [
     { name: "water_heater", selector: ent(["water_heater", "switch", "climate"]) },
@@ -1536,7 +1779,12 @@ const EDITOR_LABELS = {
   water_heater_volume: "Water heater volume", shower_liters: "Litres per shower (40 °C)", cold_water_temp: "Incoming cold water",
   drawdown_min: "Warn if drawdown per cycle below", events_count: "Events to show", drawdown: "Drawdown per cycle sensor",
   cycle_avg_7d: "Pump cycle average 7 d", cycle_avg_30d: "Pump cycle average 30 d", maintenance: "Maintenance reminders", maintenance_log: "Maintenance history (to-do list)",
-  show_events: "Event log", show_labels: "Labels in drawing", show_tiles: "Value tiles", show_stats: "Pump statistics", show_history: "History graph", show_controls: "Buttons",
+  show_events: "Event log", show_labels: "Labels in drawing",
+  has_uv: "UV unit", has_filter: "Filter", has_outdoor_tap: "Outdoor tap", uv_entity: "UV lamp entity (on = lamp lit) or lamp hours",
+  filter_entity: "Filter sensor (optional)", outdoor_tap_entity: "Outdoor tap valve (optional)", outdoor_tap_shutoff: "Indoor stop valve for outdoor tap",
+  irrigation: "Irrigation (not a leak while running)", tap_frost_temp: "Outdoor tap frost warning below",
+  interval_precharge: "Pre-charge every", interval_sample: "Water sample every", interval_uv: "UV lamp every", interval_filter: "Filter every",
+  interval_outdoor_tap: "Outdoor tap every", show_tiles: "Value tiles", show_stats: "Pump statistics", show_history: "History graph", show_controls: "Buttons",
 };
 
 // number fields are entered in the chosen display units: relabel and rescale their ranges
