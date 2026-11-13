@@ -27,7 +27,7 @@ A Home Assistant Lovelace card for a private water supply: well with submersible
 ### Manual
 
 1. Copy `water-system-card.js` to `/config/www/`
-2. Settings → Dashboards → ⋮ → Resources → Add `/local/water-system-card.js?v=1.6.0` as **JavaScript module**
+2. Settings → Dashboards → ⋮ → Resources → Add `/local/water-system-card.js?v=1.7.0` as **JavaScript module**
 
 ## HA package (recommended)
 
@@ -40,6 +40,33 @@ pump wear trend (7 d vs 30 d), legionella tracking, away mode (+ optional automa
 2. Copy `packages/water_system.yaml` to `/config/packages/`
 3. Edit the entity IDs in **Water system config** and the notify service in `script.water_notify` (search `CHANGE ME`)
 4. Restart, then set `use_package: true` in the card
+
+## Maintenance log
+
+Pressing **Done** on a maintenance item opens a form (date, measured values, notes). Saving:
+- updates the item's `input_datetime` (resets the due countdown)
+- adds a completed entry to a to-do list, so the history is kept permanently and shown in the form next time
+
+Create the list once: **Settings → Devices & services → Add integration → Local To-do**, name it `Water maintenance`
+(entity `todo.water_maintenance`, picked up automatically) – or set `maintenance_log: todo.your_list`.
+You can also read the history in HA's **To-do lists** panel.
+
+Custom items and fields:
+
+```yaml
+maintenance:
+  - precharge                       # built-in: pre-charge, cut-in, cut-out, adjusted to
+  - sample                          # built-in: lab, result, report no.
+  - name: Softener salt
+    entity: input_datetime.water_last_salt
+    interval_days: 60
+    icon: mdi:shaker-outline
+    fields:
+      - {label: Bags added, type: number}
+      - {label: Brand, type: text}
+      - {label: Tank cleaned, type: bool}
+      - {label: Hardness, type: select, options: [Soft, Medium, Hard]}
+```
 
 ## Configuration
 

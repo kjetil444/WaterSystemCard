@@ -1,10 +1,10 @@
 /*
- * water-system-card  v1.6.0
+ * water-system-card  v1.7.0
  * Home Assistant custom Lovelace card: well → pump (with pump guard) → pressure tank → valve → house + water heater.
  * Self-contained, no HACS dependencies. Every entity is optional. Includes a visual editor.
  */
 
-const WSC_VERSION = "1.6.0";
+const WSC_VERSION = "1.7.0";
 const C = { water: "#38bdf8", ok: "#22c55e", warn: "#f59e0b", bad: "#ef4444", frost: "#60a5fa", heat: "#f97316", hot: "#f43f5e" };
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -39,10 +39,15 @@ const PKG_DEFAULTS = {
   cycle_avg_7d: "sensor.water_pump_cycle_avg_7d", cycle_avg_30d: "sensor.water_pump_cycle_avg_30d", pump_trend: PKG.wear,
 };
 const MAINT = {
-  precharge: { entity: "input_datetime.water_last_precharge_check", interval: "input_number.water_precharge_interval_days", days: 365, icon: "mdi:gauge" },
-  sample: { entity: "input_datetime.water_last_water_sample", interval: "input_number.water_sample_interval_days", days: 1095, icon: "mdi:test-tube" },
-  uv: { entity: "input_datetime.water_last_uv_lamp", interval: "input_number.water_uv_interval_days", days: 365, icon: "mdi:lightbulb-fluorescent-tube-outline" },
-  filter: { entity: "input_datetime.water_last_filter_change", interval: "input_number.water_filter_interval_days", days: 180, icon: "mdi:filter-outline" },
+  precharge: { entity: "input_datetime.water_last_precharge_check", interval: "input_number.water_precharge_interval_days", days: 365, icon: "mdi:gauge",
+    fields: [{ key: "f_pre", type: "number", q: "pressure" }, { key: "f_cutin", type: "number", q: "pressure" }, { key: "f_cutout", type: "number", q: "pressure" },
+      { key: "f_adj", type: "number", q: "pressure" }] },
+  sample: { entity: "input_datetime.water_last_water_sample", interval: "input_number.water_sample_interval_days", days: 1095, icon: "mdi:test-tube",
+    fields: [{ key: "f_lab", type: "text" }, { key: "f_result", type: "select", options: ["r_ok", "r_remarks", "r_fail"] }, { key: "f_ref", type: "text" }] },
+  uv: { entity: "input_datetime.water_last_uv_lamp", interval: "input_number.water_uv_interval_days", days: 365, icon: "mdi:lightbulb-fluorescent-tube-outline",
+    fields: [{ key: "f_hours", type: "number", unit: "h" }, { key: "f_lamp", type: "text" }, { key: "f_sleeve", type: "bool" }] },
+  filter: { entity: "input_datetime.water_last_filter_change", interval: "input_number.water_filter_interval_days", days: 180, icon: "mdi:filter-outline",
+    fields: [{ key: "f_ftype", type: "text" }, { key: "f_pbefore", type: "number", q: "pressure" }] },
 };
 
 const DEFAULTS = {
@@ -114,6 +119,11 @@ const STRINGS = {
     t_hot_l: "Hot water", showers: "{v} showers", t_draw: "Per cycle", t_cyc: "Cycle 7 d / 30 d",
     ev: "Events", maint: "Maintenance", m_precharge: "Tank pre-charge", m_sample: "Water sample", m_uv: "UV lamp", m_filter: "Filter",
     due_in: "in {v} d", overdue: "{v} d overdue", never_done: "not logged", done: "Done", c_away: "Away",
+    dlg_title: "{v} – log", f_date: "Date", f_notes: "Notes", save: "Save as done", cancel: "Cancel", prev: "Previous entries",
+    no_prev: "No previous entries.", need_num: "Enter a number", need_date: "Pick a date", no_log: "History isn't saved: add a Local To-do list (see README).",
+    last: "Last", f_pre: "Measured pre-charge", f_cutin: "Cut-in pressure", f_cutout: "Cut-out pressure", f_adj: "Pre-charge adjusted to",
+    f_lab: "Laboratory", f_result: "Result", f_ref: "Report no.", r_ok: "Approved", r_remarks: "Remarks", r_fail: "Not approved",
+    f_hours: "Lamp hours", f_lamp: "New lamp (model)", f_sleeve: "Quartz sleeve cleaned", f_ftype: "Filter type", f_pbefore: "Pressure before change", yes: "Yes", no: "No",
     loc_box: "Tank box", loc_house: "House", loc_heater: "Under water heater", loc_well: "Well", loc_pipe: "Outdoor pipe",
     b_trace: "It's {v} outside and the heat cable is off.",
     b_low: "Pressure is below {v}.",
@@ -143,6 +153,11 @@ const STRINGS = {
     t_hot_l: "Varmtvann", showers: "{v} dusjer", t_draw: "Per syklus", t_cyc: "Syklus 7 d / 30 d",
     ev: "Hendelser", maint: "Vedlikehold", m_precharge: "Fortrykk i tanken", m_sample: "Vannprøve", m_uv: "UV-lampe", m_filter: "Filter",
     due_in: "om {v} d", overdue: "forfalt {v} d", never_done: "ikke registrert", done: "Utført", c_away: "Borte",
+    dlg_title: "{v} – registrer", f_date: "Dato", f_notes: "Notat", save: "Lagre som utført", cancel: "Avbryt", prev: "Tidligere registreringer",
+    no_prev: "Ingen tidligere registreringer.", need_num: "Skriv inn et tall", need_date: "Velg en dato", no_log: "Historikk lagres ikke: legg til en Local To-do-liste (se README).",
+    last: "Sist", f_pre: "Målt fortrykk", f_cutin: "Innkoblingstrykk", f_cutout: "Utkoblingstrykk", f_adj: "Fortrykk justert til",
+    f_lab: "Laboratorium", f_result: "Resultat", f_ref: "Rapportnr.", r_ok: "Godkjent", r_remarks: "Merknader", r_fail: "Ikke godkjent",
+    f_hours: "Lampetimer", f_lamp: "Ny lampe (modell)", f_sleeve: "Kvartsglass rengjort", f_ftype: "Filtertype", f_pbefore: "Trykk før bytte", yes: "Ja", no: "Nei",
     loc_box: "Tankkasse", loc_house: "Hus", loc_heater: "Under bereder", loc_well: "Brønn", loc_pipe: "Rør ute",
     b_trace: "Det er {v} ute og varmekabelen er av.",
     b_low: "Trykket er under {v}.",
@@ -181,7 +196,7 @@ ha-card { padding:16px; overflow:hidden; }
 
 svg.diagram { width:100%; height:auto; display:block; margin:8px 0 2px; }
 svg.diagram text { font-family:inherit; font-size:19px; fill:var(--secondary-text-color); }
-svg.diagram .big { font-size:28px; font-weight:700; fill:var(--primary-text-color); }
+svg.diagram .big { font-size:23px; font-weight:700; fill:var(--primary-text-color); }
 svg.diagram .val { font-weight:600; fill:var(--primary-text-color); }
 .tb { transform-box:view-box; }
 .pipe-base { fill:none; stroke:color-mix(in srgb, var(--primary-text-color) 14%, transparent); stroke-width:9; stroke-linecap:round; stroke-linejoin:round; }
@@ -238,6 +253,34 @@ svg.diagram .whv { font-size:17px; font-weight:700; fill:#fff; stroke:rgba(0,0,0
 .mt small.bad { color:${C.warn}; font-weight:600; }
 .mt button { border:0; border-radius:10px; padding:6px 10px; font:inherit; font-size:12px; font-weight:600; cursor:pointer;
   color:var(--primary-text-color); background:color-mix(in srgb, var(--primary-text-color) 8%, transparent); }
+dialog.mdlg { border:0; border-radius:18px; padding:0; width:min(440px, 94vw); max-height:88vh; color:var(--primary-text-color);
+  background:var(--ha-card-background, var(--card-background-color, #1c1f26)); box-shadow:0 20px 60px rgba(0,0,0,.45); }
+dialog.mdlg::backdrop { background:rgba(0,0,0,.55); }
+.dl { display:flex; flex-direction:column; max-height:88vh; }
+.dl header { display:flex; align-items:center; gap:10px; padding:16px 18px 8px; font-size:16px; font-weight:600; --mdc-icon-size:22px; }
+.dl header ha-icon { color:${C.water}; }
+.dl .body { padding:4px 18px 8px; overflow:auto; }
+.dl label.fld { display:block; margin:10px 0 0; font-size:12px; color:var(--secondary-text-color); }
+.dl .row { display:flex; align-items:center; gap:8px; margin-top:4px; }
+.dl input, .dl select, .dl textarea { flex:1; width:100%; box-sizing:border-box; font:inherit; font-size:15px; color:var(--primary-text-color); padding:10px 12px; border-radius:10px;
+  border:1px solid color-mix(in srgb, var(--primary-text-color) 18%, transparent); background:color-mix(in srgb, var(--primary-text-color) 5%, transparent); }
+.dl textarea { min-height:64px; resize:vertical; }
+.dl .row small { color:var(--secondary-text-color); min-width:34px; }
+.dl .err { color:${C.bad}; font-size:12px; min-height:14px; margin-top:2px; }
+.dl .chk { display:flex; align-items:center; gap:10px; margin-top:12px; font-size:14px; }
+.dl .chk input { flex:none; width:20px; height:20px; }
+.dl .prev { margin-top:16px; padding-top:10px; border-top:1px solid color-mix(in srgb, var(--primary-text-color) 10%, transparent); }
+.dl .prev h4 { margin:0 0 6px; font-size:11px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--secondary-text-color); }
+.dl .pe { padding:8px 10px; border-radius:10px; margin-bottom:6px; font-size:13px; background:color-mix(in srgb, var(--primary-text-color) 5%, transparent); }
+.dl .pe b { display:block; font-size:12px; margin-bottom:2px; }
+.dl .pe div { color:var(--secondary-text-color); white-space:pre-line; }
+.dl .hint { font-size:12px; color:${C.warn}; margin-top:10px; }
+.dl footer { display:flex; gap:8px; justify-content:flex-end; padding:12px 18px 16px; }
+.dl footer button { border:0; border-radius:12px; padding:11px 16px; font:inherit; font-size:14px; font-weight:600; cursor:pointer;
+  color:var(--primary-text-color); background:color-mix(in srgb, var(--primary-text-color) 8%, transparent); }
+.dl footer button.pri { color:#fff; background:${C.water}; }
+.mt .nm { flex:1; min-width:0; display:flex; flex-direction:column; }
+.mt .nm em { font-style:normal; font-size:11px; color:var(--secondary-text-color); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .ptitle { font-size:11px; color:var(--secondary-text-color); text-transform:uppercase; letter-spacing:.04em; margin-bottom:4px; }
 .panel { margin-top:8px; padding:10px 12px 6px; border-radius:14px; background:color-mix(in srgb, var(--primary-text-color) 5%, transparent); }
 .panel .sep { height:1px; margin:8px 0; background:color-mix(in srgb, var(--primary-text-color) 8%, transparent); }
@@ -340,6 +383,7 @@ class WaterSystemCard extends HTMLElement {
     this._loadHistory();
     this._loadLeg();
     this._loadEvents();
+    this._loadLog();
   }
 
   // ---------- helpers ----------
@@ -433,12 +477,11 @@ class WaterSystemCard extends HTMLElement {
 
   // ---------- events ----------
   _onClick(ev) {
+    const dl = ev.target.closest("[data-dlg]");
+    if (dl) { if (dl.dataset.dlg === "save") this._saveMaint(); else this._closeDlg(); return; }
+    if (ev.target.id === "mdlg") { this._closeDlg(); return; }        // click on the backdrop
     const done = ev.target.closest("[data-done]");
-    if (done) {
-      const d = new Date(), pad = (n) => String(n).padStart(2, "0");
-      this._hass.callService("input_datetime", "set_datetime", { entity_id: done.dataset.done, date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` });
-      return;
-    }
+    if (done) { this._openMaint(done.dataset.done); return; }
     const tog = ev.target.closest("[data-toggle]");
     if (tog && !ev.target.closest("[data-info]")) { this._expanded = !this._expanded; this._update(); return; }
     const el = ev.target.closest("[data-action],[data-info]");
@@ -665,6 +708,9 @@ class WaterSystemCard extends HTMLElement {
       const days = this._num(it.interval) ?? it.days;
       let last = null;
       if (s && !BAD_STATES.includes(s.state)) { const t = new Date(s.attributes.timestamp ? s.attributes.timestamp * 1000 : s.state).getTime(); if (isFinite(t)) last = t; }
+      const hist = this._logFor(it);
+      if (hist.length && (last == null || hist[0].t > last)) last = hist[0].t;
+      it.lastText = hist.length ? hist[0].lines[0] || "" : "";
       const left = last == null ? null : Math.round((last + days * 86400e3 - now) / 86400e3);
       return { ...it, last, left, due: left == null || left < 0 };
     });
@@ -709,7 +755,8 @@ class WaterSystemCard extends HTMLElement {
   _build() {
     this.shadowRoot.innerHTML = `<style>${STYLE}</style><ha-card>
       <div id="head"></div><div id="banners"></div>${this._diagramTpl()}
-      <div id="tiles"></div><div id="stats"></div><div id="extra"></div><div id="ctrls"></div></ha-card>`;
+      <div id="tiles"></div><div id="stats"></div><div id="extra"></div><div id="ctrls"></div></ha-card>
+      <dialog class="mdlg" id="mdlg"></dialog>`;
     const $ = (id) => this.shadowRoot.getElementById(id);
     this._el = { head: $("head"), banners: $("banners"), tiles: $("tiles"), stats: $("stats"), extra: $("extra"), ctrls: $("ctrls") };
     if (!this._clickBound) { this.shadowRoot.addEventListener("click", (ev) => this._onClick(ev)); this._clickBound = true; }
@@ -839,8 +886,8 @@ class WaterSystemCard extends HTMLElement {
         ${ticks}
         <g id="needle" class="tb" style="transform:rotate(0deg)"><path d="${needle}" fill="var(--primary-text-color)"/></g>
         <circle cx="${cx}" cy="${cy}" r="5.5" fill="var(--primary-text-color)"/><circle cx="${cx}" cy="${cy}" r="2.2" fill="var(--ha-card-background, var(--card-background-color, #fff))"/>
-        <text id="pval" x="${cx}" y="110" text-anchor="middle" class="big">–</text>
-        <text x="${cx}" y="123" text-anchor="middle" style="font-size:13px">${esc(c.pressure_unit)}</text>
+        <text id="pval" x="${cx}" y="104" text-anchor="middle" class="big">–</text>
+        <text x="${cx}" y="121" text-anchor="middle" style="font-size:12px">${esc(c.pressure_unit)}</text>
       </g>
 
       ${c.valve ? `<g id="valve" ${info(c.valve)} transform="translate(${inHouse ? 300 : 478},130)" style="--vc:${C.ok}">
@@ -1003,7 +1050,8 @@ class WaterSystemCard extends HTMLElement {
     if (!list) return [];
     return (Array.isArray(list) ? list : [list]).map((x) => {
       if (typeof x === "string") { const d = MAINT[x]; return d ? { key: x, name: this._t(`m_${x}`), ...d } : null; }
-      return x && x.entity ? { key: x.entity, name: x.name || x.entity, icon: x.icon || "mdi:wrench", entity: x.entity, interval: x.interval_entity, days: x.interval_days || 365 } : null;
+      return x && (x.entity || x.name) ? { key: x.key || x.entity || x.name, name: x.name || x.entity, icon: x.icon || "mdi:wrench", entity: x.entity, interval: x.interval_entity,
+        days: x.interval_days || 365, fields: (x.fields || []).map((f) => (typeof f === "string" ? { key: f, label: f, type: "text" } : { type: "text", ...f, key: f.key || f.label })) } : null;
     }).filter(Boolean);
   }
 
@@ -1011,9 +1059,129 @@ class WaterSystemCard extends HTMLElement {
     if (!m.maint.length) return "";
     return `<div class="panel"><div class="ptitle">${esc(this._t("maint"))}</div>${m.maint.map((x) => {
       const txt = x.last == null ? this._t("never_done") : x.left < 0 ? this._t("overdue", -x.left) : this._t("due_in", x.left);
-      return `<div class="mt" style="--c:${x.due && x.last != null ? C.warn : "var(--secondary-text-color)"}"><ha-icon icon="${esc(x.icon)}"></ha-icon><span>${esc(x.name)}</span>
-        <small class="${x.due && x.last != null ? "bad" : ""}">${esc(txt)}</small>${this._st(x.entity) ? `<button data-done="${esc(x.entity)}">${esc(this._t("done"))}</button>` : ""}</div>`;
+      return `<div class="mt" style="--c:${x.due && x.last != null ? C.warn : "var(--secondary-text-color)"}"><ha-icon icon="${esc(x.icon)}"></ha-icon>
+        <span class="nm">${esc(x.name)}${x.lastText ? `<em>${esc(this._t("last"))}: ${esc(x.lastText)}</em>` : ""}</span>
+        <small class="${x.due && x.last != null ? "bad" : ""}">${esc(txt)}</small><button data-done="${esc(x.key)}">${esc(this._t("done"))}</button></div>`;
     }).join("")}</div>`;
+  }
+
+  // ---------- maintenance log (HA to-do list keeps the history permanently) ----------
+  _logEntity() {
+    const c = this._config;
+    if (c.maintenance_log) return c.maintenance_log;
+    return this._st("todo.water_maintenance") ? "todo.water_maintenance" : null;
+  }
+
+  async _loadLog(force) {
+    const id = this._logEntity(), now = Date.now();
+    if (!id || !this._hass || !this._hass.callWS || this._logBusy || !this._maintItems().length) return;
+    if (!force && this._logAt && now - this._logAt < 600000) return;
+    this._logBusy = true;
+    this._logAt = now;
+    try {
+      const r = await this._hass.callWS({ type: "todo/item/list", entity_id: id });
+      this._logItems = (r && r.items) || [];
+    } catch (e) { this._logItems = null; }
+    this._logBusy = false;
+    this._update();
+    if (this._dlgKey) this._renderDlg();
+  }
+
+  // entries for one maintenance item, newest first: { t, date, lines[] }
+  _logFor(it) {
+    if (!this._logItems) return [];
+    const pre = `${it.name} – `;
+    return this._logItems.filter((x) => (x.summary || "").startsWith(pre)).map((x) => {
+      const date = x.due || (x.summary.slice(pre.length).match(/\d{4}-\d{2}-\d{2}/) || [])[0] || "";
+      return { t: new Date(date).getTime() || 0, date, lines: (x.description || "").split("\n").filter(Boolean) };
+    }).sort((a, b) => b.t - a.t);
+  }
+
+  _openMaint(key) {
+    this._dlgKey = key;
+    this._dlgVals = {};
+    this._dlgErr = {};
+    this._renderDlg();
+    const d = this.shadowRoot.getElementById("mdlg");
+    if (d && !d.open) { try { d.showModal(); } catch (e) { d.setAttribute("open", ""); } }
+    this._loadLog(true);
+  }
+
+  _closeDlg() {
+    const d = this.shadowRoot.getElementById("mdlg");
+    if (d && d.open) d.close();
+    this._dlgKey = null;
+  }
+
+  _renderDlg() {
+    const it = this._maintItems().find((x) => x.key === this._dlgKey);
+    const d = this.shadowRoot.getElementById("mdlg");
+    if (!it || !d) return;
+    // keep what the user has typed
+    d.querySelectorAll("[data-f]").forEach((el) => { this._dlgVals[el.dataset.f] = el.type === "checkbox" ? el.checked : el.value; });
+    const v = this._dlgVals, err = this._dlgErr || {};
+    const pad = (n) => String(n).padStart(2, "0"), now = new Date();
+    const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+    const label = (f) => f.label || this._t(f.key);
+    const unit = (f) => f.unit || (f.q ? this._du(f.q) : "");
+    const field = (f) => {
+      const val = v[f.key] ?? "";
+      if (f.type === "bool") return `<label class="chk"><input type="checkbox" data-f="${esc(f.key)}" ${val ? "checked" : ""}>${esc(label(f))}</label>`;
+      let input;
+      if (f.type === "select") input = `<select data-f="${esc(f.key)}"><option value=""></option>${(f.options || []).map((o) => {
+        const t = this._t(o); return `<option value="${esc(o)}" ${val === o ? "selected" : ""}>${esc(t)}</option>`; }).join("")}</select>`;
+      else input = `<input data-f="${esc(f.key)}" ${f.type === "number" ? 'type="text" inputmode="decimal"' : 'type="text"'} value="${esc(val)}">`;
+      return `<label class="fld">${esc(label(f))}<div class="row">${input}${unit(f) ? `<small>${esc(unit(f))}</small>` : ""}</div><div class="err">${esc(err[f.key] || "")}</div></label>`;
+    };
+    const hist = this._logFor(it).slice(0, 5);
+    d.innerHTML = `<div class="dl">
+      <header><ha-icon icon="${esc(it.icon)}"></ha-icon>${esc(this._t("dlg_title", it.name))}</header>
+      <div class="body">
+        <label class="fld">${esc(this._t("f_date"))}<div class="row"><input type="date" data-f="_date" value="${esc(v._date || today)}" max="${today}"></div><div class="err">${esc(err._date || "")}</div></label>
+        ${(it.fields || []).map(field).join("")}
+        <label class="fld">${esc(this._t("f_notes"))}<div class="row"><textarea data-f="_notes">${esc(v._notes || "")}</textarea></div></label>
+        ${this._logEntity() ? "" : `<div class="hint">${esc(this._t("no_log"))}</div>`}
+        ${this._logEntity() ? `<div class="prev"><h4>${esc(this._t("prev"))}</h4>${hist.length ? hist.map((h) =>
+          `<div class="pe"><b>${esc(h.date)}</b><div>${esc(h.lines.join("\n"))}</div></div>`).join("") : `<div class="pe"><div>${esc(this._t("no_prev"))}</div></div>`}</div>` : ""}
+      </div>
+      <footer><button data-dlg="cancel">${esc(this._t("cancel"))}</button><button class="pri" data-dlg="save">${esc(this._t("save"))}</button></footer>
+    </div>`;
+  }
+
+  async _saveMaint() {
+    const it = this._maintItems().find((x) => x.key === this._dlgKey);
+    const d = this.shadowRoot.getElementById("mdlg");
+    if (!it || !d) return;
+    const vals = {};
+    d.querySelectorAll("[data-f]").forEach((el) => { vals[el.dataset.f] = el.type === "checkbox" ? el.checked : el.value.trim(); });
+    this._dlgVals = vals;
+    const err = {};
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(vals._date || "")) err._date = this._t("need_date");
+    (it.fields || []).forEach((f) => { if (f.type === "number" && vals[f.key] !== "" && !isFinite(Number(String(vals[f.key]).replace(",", ".")))) err[f.key] = this._t("need_num"); });
+    this._dlgErr = err;
+    if (Object.keys(err).length) { this._renderDlg(); return; }
+    // description: one "Label: value unit" line per filled-in field
+    const lines = [];
+    (it.fields || []).forEach((f) => {
+      const raw = vals[f.key];
+      if (raw === "" || raw == null || raw === false && f.type !== "bool") return;
+      const val = f.type === "bool" ? this._t(raw ? "yes" : "no") : f.type === "select" ? this._t(raw) : f.type === "number" ? String(raw).replace(",", ".") : raw;
+      const u = f.unit || (f.q ? this._du(f.q) : "");
+      lines.push(`${f.label || this._t(f.key)}: ${val}${u ? ` ${u}` : ""}`);
+    });
+    if (vals._notes) lines.push(`${this._t("f_notes")}: ${vals._notes}`);
+    const date = vals._date;
+    try {
+      if (it.entity && this._st(it.entity)) await this._hass.callService("input_datetime", "set_datetime", { entity_id: it.entity, date });
+      const log = this._logEntity();
+      if (log) {
+        const summary = `${it.name} – ${date}`;
+        await this._hass.callService("todo", "add_item", { entity_id: log, item: summary, due_date: date, description: lines.join("\n") });
+        await this._hass.callService("todo", "update_item", { entity_id: log, item: summary, status: "completed" });
+      }
+    } catch (e) { this._dlgErr = { _date: String(e.message || e) }; this._renderDlg(); return; }
+    this._closeDlg();
+    this._loadLog(true);
   }
 
   _eventEntities() {
@@ -1175,6 +1343,7 @@ const EDITOR_SCHEMA = [
     { name: "drawdown", selector: ent("sensor") },
     { name: "cycle_avg_7d", selector: ent("sensor") },
     { name: "cycle_avg_30d", selector: ent("sensor") },
+    { name: "maintenance_log", selector: ent("todo") },
     { name: "maintenance", selector: { select: { multiple: true, mode: "list", options: [
       { value: "precharge", label: "Tank pre-charge check" }, { value: "sample", label: "Water sample" },
       { value: "uv", label: "UV lamp" }, { value: "filter", label: "Filter change" }] } } },
@@ -1271,7 +1440,7 @@ const EDITOR_LABELS = {
   use_package: "Use the HA package (alarms run in HA)", compact: "Compact (tap header to expand)", away: "Away mode switch",
   water_heater_volume: "Water heater volume", shower_liters: "Litres per shower (40 °C)", cold_water_temp: "Incoming cold water",
   drawdown_min: "Warn if drawdown per cycle below", events_count: "Events to show", drawdown: "Drawdown per cycle sensor",
-  cycle_avg_7d: "Pump cycle average 7 d", cycle_avg_30d: "Pump cycle average 30 d", maintenance: "Maintenance reminders",
+  cycle_avg_7d: "Pump cycle average 7 d", cycle_avg_30d: "Pump cycle average 30 d", maintenance: "Maintenance reminders", maintenance_log: "Maintenance history (to-do list)",
   show_events: "Event log", show_labels: "Labels in drawing", show_tiles: "Value tiles", show_stats: "Pump statistics", show_history: "History graph", show_controls: "Buttons",
 };
 
