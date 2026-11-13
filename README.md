@@ -27,7 +27,7 @@ A Home Assistant Lovelace card for a private water supply: well with submersible
 ### Manual
 
 1. Copy `water-system-card.js` to `/config/www/`
-2. Settings → Dashboards → ⋮ → Resources → Add `/local/water-system-card.js?v=1.5.0` as **JavaScript module**
+2. Settings → Dashboards → ⋮ → Resources → Add `/local/water-system-card.js?v=1.6.0` as **JavaScript module**
 
 ## HA package (recommended)
 
@@ -49,6 +49,12 @@ Everything is optional; only configured parts are shown. All options are also av
 type: custom:water-system-card
 name: Vannforsyning
 tank_location: box            # box | house
+# units – sensors may report any unit; the card converts. Thresholds below are entered in these units
+pressure_unit: bar            # bar | kPa | psi | mbar
+temperature_unit: auto        # auto (HA setting) | °C | °F
+volume_unit: L                # L | gal | m³
+flow_unit: L/min              # L/min | gal/min | m³/h
+power_unit: W                 # W | kW
 # pump and pressure
 pressure: sensor.bod_monitor_pressure
 pump_power: sensor.pump_power       # or pump_current / pump_running

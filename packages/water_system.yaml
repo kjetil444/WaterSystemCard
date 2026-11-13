@@ -16,6 +16,11 @@
 #      later under Settings → Helpers (turn off 'Water package initialized' to reset).
 #   6. In the card:  use_package: true
 #
+#  UNITS: the package compares raw sensor values, so set the helper thresholds in the same
+#  units your sensors report (e.g. psi and °F). Pressure/temperature helpers are labelled bar/°C
+#  below – change unit_of_measurement and min/max if your sensors use other units.
+#  (The card itself converts everything – see pressure_unit, temperature_unit … in the card.)
+#
 #  Requires Home Assistant 2024.10 or newer.
 # =====================================================================================
 

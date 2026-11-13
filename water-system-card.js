@@ -1,16 +1,31 @@
 /*
- * water-system-card  v1.5.0
+ * water-system-card  v1.6.0
  * Home Assistant custom Lovelace card: well → pump (with pump guard) → pressure tank → valve → house + water heater.
  * Self-contained, no HACS dependencies. Every entity is optional. Includes a visual editor.
  */
 
-const WSC_VERSION = "1.5.0";
+const WSC_VERSION = "1.6.0";
 const C = { water: "#38bdf8", ok: "#22c55e", warn: "#f59e0b", bad: "#ef4444", frost: "#60a5fa", heat: "#f97316", hot: "#f43f5e" };
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const ON_STATES = ["on", "open", "opening", "heat", "heating"];
 const BAD_STATES = ["unavailable", "unknown"];
 const LEAK_LOCS = ["box", "house", "heater", "well", "pipe"];
+// unit conversion: factor from a unit to the card's internal unit (bar, L, L/min, W, A). Temperature is handled separately (°C internally).
+const UNITS = {
+  pressure: { bar: 1, mbar: 0.001, hpa: 0.001, kpa: 0.01, pa: 0.00001, mpa: 10, psi: 0.0689476 },
+  volume: { l: 1, ml: 0.001, "m³": 1000, m3: 1000, gal: 3.78541, "ft³": 28.3168 },
+  flow: { "l/min": 1, "l/h": 1 / 60, "l/s": 60, "m³/h": 1000 / 60, "m3/h": 1000 / 60, "gal/min": 3.78541, gpm: 3.78541 },
+  power: { w: 1, kw: 1000 },
+  current: { a: 1, ma: 0.001 },
+};
+const UNIT_DEC = { bar: 2, mbar: 0, kpa: 0, psi: 1, l: 0, gal: 1, "m³": 2, "l/min": 1, "gal/min": 1, "m³/h": 2, w: 0, kw: 2 };
+const UNIT_KEYS = {
+  pressure: ["cut_in", "cut_out", "max_pressure", "low_pressure"],
+  temp: ["min_temp", "guard_warn_temp", "trace_warn_temp", "water_heater_low_temp", "water_heater_ok_temp", "legionella_temp", "cold_water_temp"],
+  volume: ["water_heater_volume", "shower_liters", "drawdown_min"],
+  power: ["power_threshold", "water_heater_power_threshold"],
+};
 // entities created by the companion HA package (packages/water_system.yaml)
 const PKG = {
   tripped: "binary_sensor.water_pump_tripped", long_run: "binary_sensor.water_pump_long_run", short_cycle: "binary_sensor.water_pump_short_cycling",
@@ -32,6 +47,11 @@ const MAINT = {
 
 const DEFAULTS = {
   name: null,
+  pressure_unit: "bar",          // bar | kPa | psi | mbar
+  temperature_unit: "auto",      // auto (from HA) | °C | °F
+  volume_unit: "L",              // L | gal | m³
+  flow_unit: "L/min",            // L/min | gal/min | m³/h
+  power_unit: "W",               // W | kW
   tank_location: "box",          // "box" = separate insulated tank box outside, "house" = tank inside the house
   cut_in: 2.0,
   cut_out: 3.5,
@@ -96,11 +116,11 @@ const STRINGS = {
     due_in: "in {v} d", overdue: "{v} d overdue", never_done: "not logged", done: "Done", c_away: "Away",
     loc_box: "Tank box", loc_house: "House", loc_heater: "Under water heater", loc_well: "Well", loc_pipe: "Outdoor pipe",
     b_trace: "It's {v} outside and the heat cable is off.",
-    b_low: "Pressure is below {v} bar.",
+    b_low: "Pressure is below {v}.",
     b_long: "Pump has run for {v} without stopping – possible leak or low well.",
     b_short: "Pump only runs {v} per start – check the tank's air pre-charge (bladder may be waterlogged).",
     b_night: "Pump started {v} times during the night ({d}) – check toilets and taps for a hidden leak.",
-    b_wh_low: "Hot water is only {v}. Below 50 °C there's little hot water and legionella can grow.",
+    b_wh_low: "Hot water is only {v}. Below {d} there's little hot water and legionella can grow.",
     b_leg: "Hot water hasn't reached {v} in the last {d} days – run a legionella heat cycle.",
     t_pressure: "Pressure", t_pump: "Pump", t_current: "Pump current", t_tank: "Tank box", t_flow: "Flow", t_today: "Today", t_well: "Well level",
     t_hot: "Hot water", t_whp: "Heater", t_whe: "Heater today", t_leg: "Last ≥ {v}", today: "today", days_ago: "{v} d ago", never: "not in {v} d",
@@ -125,11 +145,11 @@ const STRINGS = {
     due_in: "om {v} d", overdue: "forfalt {v} d", never_done: "ikke registrert", done: "Utført", c_away: "Borte",
     loc_box: "Tankkasse", loc_house: "Hus", loc_heater: "Under bereder", loc_well: "Brønn", loc_pipe: "Rør ute",
     b_trace: "Det er {v} ute og varmekabelen er av.",
-    b_low: "Trykket er under {v} bar.",
+    b_low: "Trykket er under {v}.",
     b_long: "Pumpa har gått i {v} uten stopp – mulig lekkasje eller lite vann i brønnen.",
     b_short: "Pumpa går bare {v} per start – sjekk fortrykket i tanken (membranen kan være vannfylt).",
     b_night: "Pumpa startet {v} ganger i natt ({d}) – sjekk toaletter og kraner for skjult lekkasje.",
-    b_wh_low: "Varmtvannet er bare {v}. Under 50 °C er det lite varmtvann, og legionella kan vokse.",
+    b_wh_low: "Varmtvannet er bare {v}. Under {d} er det lite varmtvann, og legionella kan vokse.",
     b_leg: "Varmtvannet har ikke vært over {v} de siste {d} dagene – kjør legionellaoppvarming.",
     t_pressure: "Trykk", t_pump: "Pumpe", t_current: "Pumpestrøm", t_tank: "Tankkasse", t_flow: "Flyt", t_today: "I dag", t_well: "Brønnivå",
     t_hot: "Varmtvann", t_whp: "Bereder", t_whe: "Bereder i dag", t_leg: "Sist ≥ {v}", today: "i dag", days_ago: "{v} d siden", never: "ikke på {v} d",
@@ -266,7 +286,19 @@ class WaterSystemCard extends HTMLElement {
 
   setConfig(config) {
     if (!config) throw new Error("Invalid configuration");
-    const cfg = { ...DEFAULTS, ...config };
+    this._raw = config;
+    const tu = config.temperature_unit && config.temperature_unit !== "auto" ? config.temperature_unit
+      : (this._hass && this._hass.config && this._hass.config.unit_system && this._hass.config.unit_system.temperature) || "°C";
+    this._tU = /f/i.test(tu) ? "°F" : "°C";
+    const user = { ...config };
+    const pk = String(user.pressure_unit || DEFAULTS.pressure_unit).toLowerCase(), vk = String(user.volume_unit || DEFAULTS.volume_unit).toLowerCase();
+    const wk = String(user.power_unit || DEFAULTS.power_unit).toLowerCase();
+    const conv = (keys, fn) => keys.forEach((k) => { if (typeof user[k] === "number") user[k] = fn(user[k]); });
+    conv(UNIT_KEYS.pressure, (v) => v * (UNITS.pressure[pk] ?? 1));
+    conv(UNIT_KEYS.volume, (v) => v * (UNITS.volume[vk] ?? 1));
+    conv(UNIT_KEYS.power, (v) => v * (UNITS.power[wk] ?? 1));
+    if (this._tU === "°F") conv(UNIT_KEYS.temp, (v) => ((v - 32) * 5) / 9);
+    const cfg = { ...DEFAULTS, ...user };
     const off = (flag, keys) => { if (cfg[flag] === false) keys.forEach((k) => delete cfg[k]); };
     off("show_valve", ["valve"]);
     off("show_pump_guard", ["pump_guard"]);
@@ -295,6 +327,13 @@ class WaterSystemCard extends HTMLElement {
   set hass(hass) {
     this._hass = hass;
     if (!this._config) return;
+    if ((!this._raw.temperature_unit || this._raw.temperature_unit === "auto") && hass.config && hass.config.unit_system) {
+      const want = /f/i.test(hass.config.unit_system.temperature || "") ? "°F" : "°C";
+      if (want !== this._tU) { this.setConfig(this._raw); this._hass = hass; }
+    }
+    const lang = String(this._config.language || (hass.locale && hass.locale.language) || hass.language || "en");
+    if (this._built && lang !== this._lang) this._built = false;
+    this._lang = lang;
     if (!this._built) this._build();
     const sig = this._ids().map((id) => { const s = hass.states[id]; return s ? s.state + (s.attributes.current_temperature ?? "") : "x"; }).join("|");
     if (sig !== this._sig) { this._sig = sig; this._update(); }
@@ -346,6 +385,30 @@ class WaterSystemCard extends HTMLElement {
     return { kpa: 0.01, pa: 0.00001, psi: 1 / 14.5038, mbar: 0.001, hpa: 0.001, mpa: 10, kw: 1000, ma: 0.001 }[u] ?? 1;
   }
   _scaled(id) { const v = this._num(id); return v == null ? null : v * this._factor(id); }
+  // value converted to the card's internal unit for quantity q (pressure, volume, flow, power, current, temp)
+  _conv(id, q) {
+    const u = this._unit(id).toLowerCase();
+    if (q === "temp") return /f/.test(u) ? (v) => ((v - 32) * 5) / 9 : /^k$/.test(u) ? (v) => v - 273.15 : (v) => v;
+    const f = (UNITS[q] || {})[u];
+    return (v) => v * (f ?? 1);
+  }
+  _canon(id, q) { const v = this._num(id); return v == null ? null : this._conv(id, q)(v); }
+  // internal value → display value / label
+  _du(q) {
+    const c = this._config;
+    return q === "temp" ? this._tU : q === "pressure" ? c.pressure_unit : q === "volume" ? c.volume_unit : q === "flow" ? c.flow_unit : q === "power" ? c.power_unit : "";
+  }
+  _disp(v, q) {
+    if (v == null) return null;
+    if (q === "temp") return this._tU === "°F" ? (v * 9) / 5 + 32 : v;
+    const f = (UNITS[q] || {})[String(this._du(q)).toLowerCase()];
+    return f ? v / f : v;
+  }
+  _fq(v, q, d) {
+    const dec = d ?? UNIT_DEC[String(this._du(q)).toLowerCase()] ?? 1;
+    return this._fmt(this._disp(v, q), dec);
+  }
+  _fv(v, q, d) { return v == null ? "–" : q === "temp" ? `${this._fq(v, q, d)}${this._tU}` : `${this._fq(v, q, d)} ${this._du(q)}`; }
   _isOn(id) {
     const s = this._st(id);
     if (!s || BAD_STATES.includes(s.state)) return false;
@@ -362,8 +425,8 @@ class WaterSystemCard extends HTMLElement {
   }
   _runSrc() {
     const c = this._config;
-    if (c.pump_power) return { id: c.pump_power, type: "num", thr: c.power_threshold };
-    if (c.pump_current) return { id: c.pump_current, type: "num", thr: c.current_threshold };
+    if (c.pump_power) return { id: c.pump_power, type: "num", thr: c.power_threshold, q: "power" };
+    if (c.pump_current) return { id: c.pump_current, type: "num", thr: c.current_threshold, q: "current" };
     if (c.pump_running) return { id: c.pump_running, type: "bin" };
     return null;
   }
@@ -426,18 +489,18 @@ class WaterSystemCard extends HTMLElement {
       const ts = (s) => new Date(s.last_changed || s.last_updated).getTime();
       const out = { start: start.getTime() };
       if (chartId && byId[chartId]) {
-        const f = this._factor(chartId);
-        let pts = byId[chartId].map((s) => ({ t: ts(s), v: parseFloat(s.state) * f })).filter((p) => isFinite(p.v));
+        const f = this._conv(chartId, chartId === c.pressure ? "pressure" : /temp/.test(chartId) || chartId === c.temperature ? "temp" : "x");
+        let pts = byId[chartId].map((s) => ({ t: ts(s), v: f(parseFloat(s.state)) })).filter((p) => isFinite(p.v));
         const step = Math.ceil(pts.length / 200);
         if (step > 1) pts = pts.filter((_, i) => i % step === 0 || i === pts.length - 1);
         out.chart = { id: chartId, pts };
       }
       if (src && byId[src.id]) {
-        const f = this._factor(src.id), runs = [];
+        const f = this._conv(src.id, src.q), runs = [];
         let cur = null;
         for (const s of byId[src.id]) {
           if (BAD_STATES.includes(s.state)) continue;
-          const on = src.type === "num" ? parseFloat(s.state) * f >= src.thr : s.state === "on";
+          const on = src.type === "num" ? f(parseFloat(s.state)) >= src.thr : s.state === "on";
           const t = ts(s);
           if (on && cur == null) cur = t;
           else if (!on && cur != null) { runs.push({ s: cur, e: t }); cur = null; }
@@ -459,7 +522,8 @@ class WaterSystemCard extends HTMLElement {
     this._legAt = now;
     const start = new Date(now - (c.legionella_days + 1) * 86400e3);
     let known = false, last = null;
-    const hit = (t, v) => { if (v != null && v >= c.legionella_temp && (last == null || t > last)) last = t; };
+    const cv = this._conv(id, "temp");
+    const hit = (t, v) => { if (v != null && isFinite(v) && cv(v) >= c.legionella_temp && (last == null || t > last)) last = t; };
     try {
       const r = await this._hass.callWS({ type: "recorder/statistics_during_period", start_time: start.toISOString(), statistic_ids: [id], period: "hour", types: ["max"] });
       const arr = (r && r[id]) || [];
@@ -481,12 +545,13 @@ class WaterSystemCard extends HTMLElement {
   _model() {
     const c = this._config, now = Date.now();
     const m = {};
-    m.p = this._scaled(c.pressure);
-    m.pw = this._scaled(c.pump_power);
-    m.amps = this._scaled(c.pump_current);
-    m.temp = this._num(c.temperature);
-    m.outT = this._num(c.outdoor_temp);
-    m.flow = this._num(c.flow);
+    m.p = this._canon(c.pressure, "pressure");
+    m.pw = this._canon(c.pump_power, "power");
+    m.amps = this._canon(c.pump_current, "current");
+    m.temp = this._canon(c.temperature, "temp");
+    m.outT = this._canon(c.outdoor_temp, "temp");
+    m.flow = this._canon(c.flow, "flow");
+    m.today = this._canon(c.water_today, "volume");
     m.well = this._num(c.well_level);
 
     m.running = null;
@@ -560,12 +625,14 @@ class WaterSystemCard extends HTMLElement {
     // water heater
     if (c.water_heater || c.water_heater_temp || c.water_heater_power) {
       const whs = this._st(c.water_heater);
-      const whp = this._scaled(c.water_heater_power);
-      const temp = this._num(c.water_heater_temp) ?? (whs && whs.attributes.current_temperature != null ? Number(whs.attributes.current_temperature) : null);
+      const whp = this._canon(c.water_heater_power, "power");
+      const haF = /f/i.test(((this._hass.config || {}).unit_system || {}).temperature || "");
+      const attrT = whs && whs.attributes.current_temperature != null ? Number(whs.attributes.current_temperature) : null;
+      const temp = this._canon(c.water_heater_temp, "temp") ?? (attrT == null ? null : haF ? ((attrT - 32) * 5) / 9 : attrT);
       const on = c.water_heater ? this._isOn(c.water_heater) : null;
       const wh = {
         on, temp, power: whp,
-        target: whs && whs.attributes.temperature != null ? Number(whs.attributes.temperature) : null,
+        target: whs && whs.attributes.temperature != null ? (haF ? ((Number(whs.attributes.temperature) - 32) * 5) / 9 : Number(whs.attributes.temperature)) : null,
         heating: whp != null ? whp >= c.water_heater_power_threshold : (whs && (whs.state === "heating" || whs.attributes.hvac_action === "heating")) || (on && c.water_heater.startsWith("switch.")) || false,
         energy: this._num(c.water_heater_energy),
       };
@@ -583,7 +650,7 @@ class WaterSystemCard extends HTMLElement {
     // away mode, tank health, pump wear, hot water litres
     m.away = c.away ? this._isOn(c.away) : false;
     m.awayAlarm = m.away && (m.flowing || m.running === true);
-    m.drawdown = this._num(c.drawdown);
+    m.drawdown = this._canon(c.drawdown, "volume");
     m.precharge = c.drawdown_warn ? this._isOn(c.drawdown_warn) : c.drawdown_min != null && m.drawdown != null && m.drawdown < c.drawdown_min;
     m.cyc7 = this._num(c.cycle_avg_7d);
     m.cyc30 = this._num(c.cycle_avg_30d);
@@ -773,7 +840,7 @@ class WaterSystemCard extends HTMLElement {
         <g id="needle" class="tb" style="transform:rotate(0deg)"><path d="${needle}" fill="var(--primary-text-color)"/></g>
         <circle cx="${cx}" cy="${cy}" r="5.5" fill="var(--primary-text-color)"/><circle cx="${cx}" cy="${cy}" r="2.2" fill="var(--ha-card-background, var(--card-background-color, #fff))"/>
         <text id="pval" x="${cx}" y="110" text-anchor="middle" class="big">–</text>
-        <text x="${cx}" y="123" text-anchor="middle" style="font-size:13px">bar</text>
+        <text x="${cx}" y="123" text-anchor="middle" style="font-size:13px">${esc(c.pressure_unit)}</text>
       </g>
 
       ${c.valve ? `<g id="valve" ${info(c.valve)} transform="translate(${inHouse ? 300 : 478},130)" style="--vc:${C.ok}">
@@ -828,7 +895,7 @@ class WaterSystemCard extends HTMLElement {
   _banners(m) {
     const c = this._config, out = [];
     const b = (col, icon, txt) => out.push(`<div class="banner" style="--c:${col}"><ha-icon icon="${icon}"></ha-icon><span>${esc(txt)}</span></div>`);
-    const tu = (v, id) => `${this._fmt(v)}${this._unit(id) || "°C"}`;
+    const tu = (v) => this._fv(v, "temp");
     if (m.leak) {
       const names = [...new Set(m.leaks.map((l) => l.name || (this._st(l.id) || {}).attributes?.friendly_name || this._t(`loc_${l.loc}`)))];
       b(C.bad, "mdi:water-alert", this._t("b_leak_at", names.join(", ")));
@@ -839,12 +906,12 @@ class WaterSystemCard extends HTMLElement {
     if (m.frost) b(C.frost, "mdi:snowflake-alert", this._t("b_frost", tu(m.temp, c.temperature)) + (m.guardOn === false ? this._t("b_frost_off") : m.guardOn ? this._t("b_frost_weak") : ""));
     if (m.guardWarn) b(C.frost, "mdi:radiator-off", this._t("b_guard_off", tu(m.temp, c.temperature)));
     if (m.traceWarn) b(C.frost, "mdi:snowflake-thermometer", this._t("b_trace", tu(m.outT, c.outdoor_temp)));
-    if (m.lowPressure && !m.leak && !m.guard) b(C.warn, "mdi:gauge-low", this._t("b_low", this._fmt(m.lowP)));
+    if (m.lowPressure && !m.leak && !m.guard) b(C.warn, "mdi:gauge-low", this._t("b_low", this._fv(m.lowP, "pressure")));
     if (m.stats && m.stats.shortCycle && !m.leak) b(C.warn, "mdi:sync-alert", this._t("b_short", this._dur(m.stats.median)));
     if (m.stats && m.stats.nightWarn && !m.leak) b(C.warn, "mdi:weather-night", this._t("b_night", m.stats.night, `${String(c.night_start).padStart(2, "0")}–${String(c.night_end).padStart(2, "0")}`));
-    if (m.wh && m.wh.low && m.wh.on !== false) b(C.frost, "mdi:water-thermometer-outline", this._t("b_wh_low", `${this._fmt(m.wh.temp, 0)} °C`));
-    if (m.wh && m.wh.legRisk) b(C.warn, "mdi:bacteria-outline", this._t("b_leg", `${c.legionella_temp} °C`, c.legionella_days));
-    if (m.precharge) b(C.warn, "mdi:gauge-low", this._t("b_precharge", m.drawdown == null ? "–" : `${this._fmt(m.drawdown, 0)} L`));
+    if (m.wh && m.wh.low && m.wh.on !== false) b(C.frost, "mdi:water-thermometer-outline", this._t("b_wh_low", this._fv(m.wh.temp, "temp", 0), this._fv(c.water_heater_low_temp, "temp", 0)));
+    if (m.wh && m.wh.legRisk) b(C.warn, "mdi:bacteria-outline", this._t("b_leg", this._fv(c.legionella_temp, "temp", 0), c.legionella_days));
+    if (m.precharge) b(C.warn, "mdi:gauge-low", this._t("b_precharge", this._fv(m.drawdown, "volume")));
     if (m.wear) b(C.warn, "mdi:engine-outline", this._t("b_wear", m.cyc7 && m.cyc30 ? `${Math.round((m.cyc7 / m.cyc30 - 1) * 100)} %` : "–"));
     const due = m.maint.filter((x) => x.due && x.last != null);
     if (due.length) b(C.warn, "mdi:wrench-clock", this._t("b_maint", due.map((x) => x.name).join(", ")));
@@ -856,7 +923,7 @@ class WaterSystemCard extends HTMLElement {
     const f = m.p == null ? 0 : clamp(m.p / c.max_pressure, 0, 1);
     q("needle").style.transform = `rotate(${(f * 240).toFixed(1)}deg)`;
     const pv = q("pval");
-    pv.textContent = m.p == null ? "–" : this._fmt(m.p, 2);
+    pv.textContent = m.p == null ? "–" : this._fq(m.p, "pressure");
     pv.style.fill = m.p == null ? "" : m.p < c.cut_in * 0.75 || m.p > c.cut_out * 1.15 ? C.warn : "";
     q("lvl").style.transform = `translateY(${(150 - 94 * (0.12 + 0.76 * f)).toFixed(1)}px)`;
 
@@ -876,11 +943,11 @@ class WaterSystemCard extends HTMLElement {
     q("wellw").setAttribute("height", (268 - wy).toFixed(1));
     if (q("wellv")) q("wellv").textContent = m.well == null ? "–" : `${this._fmt(m.well, 0)}${this._unit(c.well_level)}`;
     if (q("otemp")) {
-      q("otemp").textContent = m.outT == null ? "–" : `${this._fmt(m.outT)}${this._unit(c.outdoor_temp) || "°C"}`;
+      q("otemp").textContent = this._fv(m.outT, "temp", 1);
       q("otemp").style.fill = m.outT != null && m.outT < 0 ? C.frost : "";
     }
     if (q("ttemp")) {
-      q("ttemp").textContent = m.temp == null ? "–" : `${this._fmt(m.temp)}${this._unit(c.temperature) || "°C"}`;
+      q("ttemp").textContent = this._fv(m.temp, "temp", 1);
       q("ttemp").style.fill = m.frost ? C.frost : "";
     }
     q("fguard").style.display = m.guardOn ? "" : "none";
@@ -897,7 +964,7 @@ class WaterSystemCard extends HTMLElement {
       q("hg1").setAttribute("stop-color", cols[0]);
       q("hg2").setAttribute("stop-color", cols[1]);
       q("whfill").setAttribute("opacity", w.on === false ? "0.2" : "0.85");
-      q("whtemp").textContent = w.temp == null ? "" : `${this._fmt(w.temp, 0)}°`;
+      q("whtemp").textContent = w.temp == null ? "" : `${this._fq(w.temp, "temp", 0)}°`;
       q("legb").style.display = w.legRisk ? "" : "none";
     }
   }
@@ -911,22 +978,22 @@ class WaterSystemCard extends HTMLElement {
         <div class="val">${val}<small>${esc(unit)}</small></div></div>`);
     };
     const dec = (id) => (this._unit(id).toLowerCase() === "kw" ? 2 : 0);
-    add(c.pump_power, "mdi:flash", this._t("t_pump"), this._fmt(this._num(c.pump_power), dec(c.pump_power)), this._unit(c.pump_power) || "W", m.running ? C.water : m.guard ? C.bad : null);
+    add(c.pump_power, "mdi:flash", this._t("t_pump"), this._fq(m.pw, "power"), this._du("power"), m.running ? C.water : m.guard ? C.bad : null);
     add(c.pump_current, "mdi:current-ac", this._t("t_current"), this._fmt(this._num(c.pump_current), 1), this._unit(c.pump_current) || "A", m.running ? C.water : m.guard ? C.bad : null);
-    add(c.flow, "mdi:water-sync", this._t("t_flow"), this._fmt(m.flow), this._unit(c.flow), m.flowing ? C.water : null);
-    add(c.water_today, "mdi:water", this._t("t_today"), this._fmt(this._num(c.water_today), 0), this._unit(c.water_today), null);
+    add(c.flow, "mdi:water-sync", this._t("t_flow"), this._fq(m.flow, "flow"), this._du("flow"), m.flowing ? C.water : null);
+    add(c.water_today, "mdi:water", this._t("t_today"), this._fq(m.today, "volume"), this._du("volume"), null);
     add(c.well_level, "mdi:water-well", this._t("t_well"), this._fmt(m.well, 0), this._unit(c.well_level), null);
     if (m.wh) {
-      add(c.water_heater_power, "mdi:water-boiler", this._t("t_whp"), this._fmt(this._num(c.water_heater_power), dec(c.water_heater_power)), this._unit(c.water_heater_power) || "W", m.wh.heating ? C.hot : null);
+      add(c.water_heater_power, "mdi:water-boiler", this._t("t_whp"), this._fq(m.wh.power, "power"), this._du("power"), m.wh.heating ? C.hot : null);
       add(c.water_heater_energy, "mdi:lightning-bolt", this._t("t_whe"), this._fmt(m.wh.energy, 1), this._unit(c.water_heater_energy) || "kWh", null);
       if (m.wh.legKnown) {
         const d = m.wh.lastHot == null ? null : Math.floor((Date.now() - m.wh.lastHot) / 86400e3);
         const val = d == null ? this._t("never", c.legionella_days) : d === 0 ? this._t("today") : this._t("days_ago", d);
-        add(c.water_heater_temp, "mdi:bacteria-outline", this._t("t_leg", `${c.legionella_temp}°`), esc(val), "", m.wh.legRisk ? C.warn : C.ok);
+        add(c.water_heater_temp, "mdi:bacteria-outline", this._t("t_leg", `${this._fq(c.legionella_temp, "temp", 0)}°`), esc(val), "", m.wh.legRisk ? C.warn : C.ok);
       }
     }
-    if (m.wh && m.wh.litres != null) add(c.water_heater_temp || c.water_heater, "mdi:shower-head", this._t("t_hot_l"), `≈${m.wh.litres}`, ` L · ${this._t("showers", m.wh.showers)}`, m.wh.low ? C.frost : C.hot);
-    if (c.drawdown) add(c.drawdown, "mdi:car-coolant-level", this._t("t_draw"), this._fmt(m.drawdown, 0), "L", m.precharge ? C.warn : C.ok);
+    if (m.wh && m.wh.litres != null) add(c.water_heater_temp || c.water_heater, "mdi:shower-head", this._t("t_hot_l"), `≈${this._fq(m.wh.litres, "volume", 0)}`, ` ${this._du("volume")} · ${this._t("showers", m.wh.showers)}`, m.wh.low ? C.frost : C.hot);
+    if (c.drawdown) add(c.drawdown, "mdi:car-coolant-level", this._t("t_draw"), this._fq(m.drawdown, "volume"), this._du("volume"), m.precharge ? C.warn : C.ok);
     if (c.cycle_avg_7d) add(c.cycle_avg_7d, "mdi:chart-timeline-variant", this._t("t_cyc"), `${this._fmt(m.cyc7, 0)}/${this._fmt(m.cyc30, 0)}`, "s", m.wear ? C.warn : null);
     return out.length ? `<div class="tiles">${out.join("")}</div>` : "";
   }
@@ -1009,20 +1076,23 @@ class WaterSystemCard extends HTMLElement {
     let pts = h.chart.pts.filter((p) => p.t >= t0);
     const pre = h.chart.pts.filter((p) => p.t < t0).pop();
     if (pre) pts.unshift({ t: t0, v: pre.v });
-    const cur = this._scaled(id);
+    const q = isP ? "pressure" : id === c.temperature || /temp/.test(id) ? "temp" : null;
+    const cur = q ? this._canon(id, q) : this._num(id);
     if (cur != null) pts.push({ t: now, v: cur });
     if (pts.length < 2) return "";
+    if (q) pts = pts.map((p) => ({ t: p.t, v: this._disp(p.v, q) }));
     const vs = pts.map((p) => p.v);
     let lo = Math.min(...vs), hi = Math.max(...vs);
     const dLo = lo, dHi = hi;
-    if (isP) { lo = Math.min(lo, c.cut_in); hi = Math.max(hi, c.cut_out); }
+    const ci = this._disp(c.cut_in, "pressure"), co = this._disp(c.cut_out, "pressure");
+    if (isP) { lo = Math.min(lo, ci); hi = Math.max(hi, co); }
     const pad = (hi - lo) * 0.08 || 0.1;
     lo -= pad; hi += pad;
     const x = (t) => (((t - t0) / (now - t0)) * W).toFixed(1);
     const y = (v) => (4 + (1 - (v - lo) / (hi - lo)) * 52).toFixed(1);
     const line = pts.map((p, i) => `${i ? "L" : "M"}${x(p.t)},${y(p.v)}`).join(" ");
     const area = `${line} L${x(now)},56 L${x(pts[0].t)},56 Z`;
-    const refs = isP ? [c.cut_in, c.cut_out].map((v) => `<line x1="0" x2="${W}" y1="${y(v)}" y2="${y(v)}" stroke="${C.ok}" stroke-width="1" stroke-dasharray="4 4" vector-effect="non-scaling-stroke" opacity=".7"/>`).join("") : "";
+    const refs = isP ? [ci, co].map((v) => `<line x1="0" x2="${W}" y1="${y(v)}" y2="${y(v)}" stroke="${C.ok}" stroke-width="1" stroke-dasharray="4 4" vector-effect="non-scaling-stroke" opacity=".7"/>`).join("") : "";
     let strips = "";
     if (m.stats) {
       strips = m.stats.iv.filter((r) => (r.e ?? now) > t0).map((r) => {
@@ -1030,7 +1100,7 @@ class WaterSystemCard extends HTMLElement {
         return `<rect x="${x(a)}" y="62" width="${w.toFixed(1)}" height="8" fill="${C.water}" opacity=".85"/>`;
       }).join("");
     }
-    const unit = isP ? "bar" : this._unit(id);
+    const unit = q ? this._du(q) : this._unit(id);
     return `<div class="hist" data-info="${esc(id)}">
       <div class="row"><span>${esc(isP ? this._t("h_pressure") : this._t("h_hist"))} · ${c.history_hours} ${esc(this._t("h"))}${strips ? `<span class="lg"><i></i>${esc(this._t("t_pump"))}</span>` : ""}</span>
       <span>${this._fmt(dLo, 1)} – ${this._fmt(dHi, 1)} ${esc(unit)}</span></div>
@@ -1083,6 +1153,15 @@ const EDITOR_SCHEMA = [
   { name: "name", selector: { text: {} } },
   { name: "tank_location", selector: { select: { mode: "dropdown", options: [
     { value: "box", label: "Separate tank box (outside)" }, { value: "house", label: "Inside the house" }] } } },
+  { type: "expandable", name: "", title: "Units", flatten: true, schema: [
+    { type: "grid", name: "", schema: [
+      { name: "pressure_unit", selector: { select: { mode: "dropdown", options: ["bar", "kPa", "psi", "mbar"] } } },
+      { name: "temperature_unit", selector: { select: { mode: "dropdown", options: [{ value: "auto", label: "Auto (from HA)" }, "°C", "°F"] } } },
+      { name: "volume_unit", selector: { select: { mode: "dropdown", options: ["L", "gal", "m³"] } } },
+      { name: "flow_unit", selector: { select: { mode: "dropdown", options: ["L/min", "gal/min", "m³/h"] } } },
+      { name: "power_unit", selector: { select: { mode: "dropdown", options: ["W", "kW"] } } },
+    ] },
+  ] },
   { type: "expandable", name: "", title: "HA package, away mode and extras", flatten: true, schema: [
     bool("use_package"), bool("compact"),
     { name: "away", selector: ent("input_boolean") },
@@ -1188,12 +1267,36 @@ const EDITOR_LABELS = {
   night_start: "Night from (hour)", night_end: "Night to (hour)", night_starts_warn: "Warn at night starts ≥", history_hours: "History length",
   confirm: "Ask 'are you sure' before", show_valve: "Main valve", show_pump_guard: "Pump guard (KM 35)", show_frost_guard: "Frost guard",
   show_heat_trace: "Heat cable", show_water_heater: "Water heater", show_leak: "Leak sensors", show_outdoor: "Outdoor temperature",
+  pressure_unit: "Pressure", temperature_unit: "Temperature", volume_unit: "Volume", flow_unit: "Flow", power_unit: "Power",
   use_package: "Use the HA package (alarms run in HA)", compact: "Compact (tap header to expand)", away: "Away mode switch",
   water_heater_volume: "Water heater volume", shower_liters: "Litres per shower (40 °C)", cold_water_temp: "Incoming cold water",
   drawdown_min: "Warn if drawdown per cycle below", events_count: "Events to show", drawdown: "Drawdown per cycle sensor",
   cycle_avg_7d: "Pump cycle average 7 d", cycle_avg_30d: "Pump cycle average 30 d", maintenance: "Maintenance reminders",
   show_events: "Event log", show_labels: "Labels in drawing", show_tiles: "Value tiles", show_stats: "Pump statistics", show_history: "History graph", show_controls: "Buttons",
 };
+
+// number fields are entered in the chosen display units: relabel and rescale their ranges
+function unitSchema(schema, cfg, hass) {
+  const pu = cfg.pressure_unit || "bar", vu = cfg.volume_unit || "L", wu = cfg.power_unit || "W";
+  const tu = cfg.temperature_unit && cfg.temperature_unit !== "auto" ? cfg.temperature_unit
+    : (/f/i.test((((hass || {}).config || {}).unit_system || {}).temperature || "") ? "°F" : "°C");
+  const nice = (v) => Number(v.toPrecision(2));
+  const map = (n) => {
+    if (n.schema) return { ...n, schema: n.schema.map(map) };
+    const nb = n.selector && n.selector.number;
+    if (!nb) return n;
+    let { min, max, step } = nb, unit = nb.unit_of_measurement;
+    const niceStep = (x) => { const e = 10 ** Math.floor(Math.log10(x)), f = x / e; return Number(((f < 1.5 ? 1 : f < 3.5 ? 2 : f < 7.5 ? 5 : 10) * e).toPrecision(1)); };
+    const scale = (k) => { step = niceStep(step * k); min = nice(min * k); max = nice(max * k); };
+    if (unit === "bar" && pu !== "bar") { scale(1 / UNITS.pressure[pu.toLowerCase()]); unit = pu; }
+    else if (unit === "L" && vu !== "L") { scale(1 / UNITS.volume[vu.toLowerCase()]); unit = vu; }
+    else if (unit === "W" && wu !== "W") { scale(1 / UNITS.power[wu.toLowerCase()]); unit = wu; }
+    else if (unit === "°C" && tu === "°F") { min = Math.round(min * 1.8 + 32); max = Math.round(max * 1.8 + 32); step = 1; unit = "°F"; }
+    else return n;
+    return { ...n, selector: { number: { ...nb, min, max, step, unit_of_measurement: unit } } };
+  };
+  return schema.map(map);
+}
 
 class WaterSystemCardEditor extends HTMLElement {
   setConfig(config) { this._config = config; this._render(); }
@@ -1228,7 +1331,7 @@ class WaterSystemCardEditor extends HTMLElement {
       delete data.leak;
     }
     this._form.hass = this._hass;
-    this._form.schema = EDITOR_SCHEMA;
+    this._form.schema = unitSchema(EDITOR_SCHEMA, data, this._hass);
     this._form.data = data;
   }
 }
