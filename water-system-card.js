@@ -1,15 +1,16 @@
 /*
- * water-system-card  v1.3.0
+ * water-system-card  v1.4.0
  * Home Assistant custom Lovelace card: well → pump (with pump guard) → pressure tank → valve → house + water heater.
  * Self-contained, no HACS dependencies. Every entity is optional. Includes a visual editor.
  */
 
-const WSC_VERSION = "1.3.0";
+const WSC_VERSION = "1.4.0";
 const C = { water: "#38bdf8", ok: "#22c55e", warn: "#f59e0b", bad: "#ef4444", frost: "#60a5fa", heat: "#f97316", hot: "#f43f5e" };
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const ON_STATES = ["on", "open", "opening", "heat", "heating"];
 const BAD_STATES = ["unavailable", "unknown"];
+const LEAK_LOCS = ["box", "house", "heater", "well", "pipe"];
 
 const DEFAULTS = {
   name: null,
@@ -19,7 +20,8 @@ const DEFAULTS = {
   max_pressure: 6,
   low_pressure: null,
   min_temp: 3,
-  trace_warn_temp: 0,            // warn if outdoor temp is below this and the heat cable is off
+  trace_warn_temp: 5,            // warn if outdoor temp is below this and the heat cable is off
+  guard_warn_temp: 5,            // warn if tank box temp is below this and the frost guard is off
   power_threshold: 50,
   current_threshold: 0.5,
   flow_threshold: 0.1,
@@ -35,7 +37,19 @@ const DEFAULTS = {
   water_heater_ok_temp: 60,      // at/above: red (hot)
   legionella_temp: 70,           // must be reached at least once every legionella_days
   legionella_days: 7,
-  confirm: true,
+  confirm: true,                 // true = all, false = none, or a list: [pump, valve, frost_guard, heat_trace, water_heater]
+  show_valve: true,
+  show_pump_guard: true,
+  show_frost_guard: true,
+  show_heat_trace: true,
+  show_water_heater: true,
+  show_leak: true,
+  show_outdoor: true,
+  show_labels: true,
+  show_tiles: true,
+  show_stats: true,
+  show_history: true,
+  show_controls: true,
   language: null,
 };
 
@@ -46,7 +60,9 @@ const STRINGS = {
     s_long: "Pump running long", s_frost: "Frost risk", s_low: "Low pressure", s_short: "Short cycling", s_pump: "Pumping", s_use: "Water in use",
     b_leak: "Leak sensor triggered – check the pump house and pipes.",
     b_guard: "Pressure is low but the pump isn't running – check the pump guard display (EIL = dry run, EIH = overcurrent, EUL = low voltage).",
-    b_frost: "Tank box is at {v} – risk of frozen pipes.", b_frost_off: " Frost guard is off.",
+    b_frost: "Tank box is at {v} – risk of frozen pipes.", b_frost_off: " Frost guard is off.", b_frost_weak: " Frost guard is on but can't keep it warm – check it.",
+    b_guard_off: "Tank box is {v} and the frost guard is off.", b_leak_at: "Leak: {v} – close the main valve and check.",
+    loc_box: "Tank box", loc_house: "House", loc_heater: "Under water heater", loc_well: "Well", loc_pipe: "Outdoor pipe",
     b_trace: "It's {v} outside and the heat cable is off.",
     b_low: "Pressure is below {v} bar.",
     b_long: "Pump has run for {v} without stopping – possible leak or low well.",
@@ -67,7 +83,9 @@ const STRINGS = {
     s_long: "Lang pumpetid", s_frost: "Frostfare", s_low: "Lavt trykk", s_short: "Hyppige starter", s_pump: "Pumper", s_use: "Vann i bruk",
     b_leak: "Lekkasjesensor utløst – sjekk pumperommet og rørene.",
     b_guard: "Lavt trykk, men pumpa går ikke – sjekk displayet på pumpevakten (EIL = tørrkjøring, EIH = overstrøm, EUL = lav spenning).",
-    b_frost: "Tankkassen er {v} – fare for frosne rør.", b_frost_off: " Frostvakten er av.",
+    b_frost: "Tankkassen er {v} – fare for frosne rør.", b_frost_off: " Frostvakten er av.", b_frost_weak: " Frostvakten er på, men klarer ikke å holde varmen – sjekk den.",
+    b_guard_off: "Tankkassen er {v} og frostvakten er av.", b_leak_at: "Lekkasje: {v} – steng hovedkranen og sjekk.",
+    loc_box: "Tankkasse", loc_house: "Hus", loc_heater: "Under bereder", loc_well: "Brønn", loc_pipe: "Rør ute",
     b_trace: "Det er {v} ute og varmekabelen er av.",
     b_low: "Trykket er under {v} bar.",
     b_long: "Pumpa har gått i {v} uten stopp – mulig lekkasje eller lite vann i brønnen.",
@@ -127,6 +145,13 @@ svg.diagram .val { font-weight:600; fill:var(--primary-text-color); }
 @keyframes glow { 0%,100% { opacity:.25; transform:scale(1); } 50% { opacity:.7; transform:scale(1.25); } }
 @keyframes spin { to { transform:rotate(360deg); } }
 #needle { transition:transform .7s cubic-bezier(.3,1.4,.5,1); transform-origin:380px 76px; }
+.lkdrop { animation:lkdrop .9s ease-in infinite; }
+@keyframes lkdrop { 0% { transform:translateY(0); opacity:1; } 100% { transform:translateY(var(--dy)); opacity:.15; } }
+.lkpud { transform-origin:center; animation:lkpud 2s ease-in-out infinite; opacity:.8; }
+@keyframes lkpud { 50% { transform:scaleX(1.15); } }
+.lkring { animation:lkring 1s ease-in-out infinite; }
+@keyframes lkring { 50% { opacity:.2; } }
+svg.diagram .whv { font-size:17px; font-weight:700; fill:#fff; stroke:rgba(0,0,0,.45); stroke-width:3px; paint-order:stroke; }
 .trace { fill:none; stroke:color-mix(in srgb, var(--primary-text-color) 25%, transparent); stroke-width:2.5; stroke-dasharray:3 4; transition:stroke .3s; }
 .trace.on { stroke:${C.heat}; stroke-dasharray:none; stroke-width:3; filter:drop-shadow(0 0 3px ${C.heat}); }
 .trace.warn { stroke:${C.frost}; }
@@ -191,7 +216,16 @@ class WaterSystemCard extends HTMLElement {
 
   setConfig(config) {
     if (!config) throw new Error("Invalid configuration");
-    this._config = { ...DEFAULTS, ...config };
+    const cfg = { ...DEFAULTS, ...config };
+    const off = (flag, keys) => { if (cfg[flag] === false) keys.forEach((k) => delete cfg[k]); };
+    off("show_valve", ["valve"]);
+    off("show_pump_guard", ["pump_guard"]);
+    off("show_frost_guard", ["frost_guard"]);
+    off("show_heat_trace", ["heat_trace"]);
+    off("show_water_heater", ["water_heater", "water_heater_temp", "water_heater_power", "water_heater_energy"]);
+    off("show_leak", ["leak", ...LEAK_LOCS.map((l) => `leak_${l}`)]);
+    off("show_outdoor", ["outdoor_temp"]);
+    this._config = cfg;
     this._sig = "";
     this._hist = null;
     this._histAt = 0;
@@ -223,7 +257,18 @@ class WaterSystemCard extends HTMLElement {
     let out = v === undefined ? s : s.replace("{v}", v);
     return d === undefined ? out : out.replace("{d}", d);
   }
-  _leakIds() { const l = this._config.leak; return !l ? [] : Array.isArray(l) ? l : [l]; }
+  _leaks() {
+    const c = this._config, out = [];
+    const add = (x, loc) => {
+      if (!x) return;
+      if (typeof x === "string") out.push({ id: x, loc, name: null });
+      else if (x.entity) out.push({ id: x.entity, loc: x.location || loc, name: x.name || null });
+    };
+    (Array.isArray(c.leak) ? c.leak : [c.leak]).forEach((x) => add(x, "house"));
+    LEAK_LOCS.forEach((l) => { const v = c[`leak_${l}`]; (Array.isArray(v) ? v : [v]).forEach((x) => add(x, l)); });
+    return out;
+  }
+  _leakIds() { return this._leaks().map((l) => l.id); }
   _ids() {
     const c = this._config;
     const ids = [c.pressure, c.pump_power, c.pump_current, c.pump_switch, c.pump_running, c.pump_guard, c.valve, c.temperature, c.heat_trace, c.frost_guard, c.outdoor_temp,
@@ -393,18 +438,20 @@ class WaterSystemCard extends HTMLElement {
 
     m.valveOpen = this._st(c.valve) ? this._isOn(c.valve) : true;
     m.flowing = m.valveOpen && (m.flow != null ? m.flow > c.flow_threshold : m.running === true);
-    m.leak = this._leakIds().some((id) => (this._st(id) || {}).state === "on");
+    m.leaks = this._leaks().filter((l) => (this._st(l.id) || {}).state === "on");
+    m.leak = m.leaks.length > 0;
     m.frost = m.temp != null && m.temp < c.min_temp;
     m.guardOn = c.frost_guard ? this._isOn(c.frost_guard) : null;
     m.traceOn = c.heat_trace ? this._isOn(c.heat_trace) : null;
     m.traceWarn = m.traceOn === false && m.outT != null && m.outT < c.trace_warn_temp;
+    m.guardWarn = !m.frost && m.guardOn === false && m.temp != null && m.temp < c.guard_warn_temp;
     m.lowP = c.low_pressure ?? Math.max(0.5, c.cut_in - 0.5);
     m.lowPressure = m.p != null && m.p < m.lowP;
 
     // pump guard (e.g. EMS KM 35): explicit entity, or inferred from low pressure + pump not running
     m.guard = (this._st(c.pump_guard) || {}).state === "on";
     const src = this._runSrc();
-    if (!m.guard && src && m.valveOpen && m.p != null && m.p < c.cut_in - 0.2 && m.running === false) {
+    if (!m.guard && c.show_pump_guard !== false && src && m.valveOpen && m.p != null && m.p < c.cut_in - 0.2 && m.running === false) {
       this._lowSince = this._lowSince || now;
       m.guard = now - this._lowSince > c.guard_delay * 1000;
     } else this._lowSince = null;
@@ -497,6 +544,7 @@ class WaterSystemCard extends HTMLElement {
 
   _diagramTpl() {
     const c = this._config, t = (k) => esc(this._t(k));
+    const labels = c.show_labels !== false;
     const inHouse = c.tank_location === "house";
     const cx = 380, cy = 76, R = 52, r = 40, max = c.max_pressure, SW = 240;
     const ang = (f) => ((210 - SW * f) * Math.PI) / 180;
@@ -526,8 +574,25 @@ class WaterSystemCard extends HTMLElement {
     const fixture = "color-mix(in srgb, var(--primary-text-color) 45%, transparent)";
     const stones = [[150, 214, 7], [330, 246, 9], [440, 212, 6], [580, 252, 8], [250, 266, 6], [128, 262, 5], [610, 214, 5]]
       .map(([x, y, s]) => `<ellipse cx="${x}" cy="${y}" rx="${s}" ry="${s * 0.6}" fill="#a16207" opacity=".13"/>`).join("");
-    const outdoorPipe = inHouse ? "M86,139 H168" : "M86,139 H176 M314,139 H452";
+    const outdoorPipe = inHouse ? "M86,139 H160" : "M86,139 H176 M314,139 H452";
     const pipeEnd = hasWh ? 582 : 540;
+    // house geometry: one small house (tank in box) or one long house with a technical room (tank inside)
+    const hb = inHouse ? { x: 160, y: 20, w: 472, roof: "150,22 396,-36 642,22", gx: 396, gy: 4 }
+                       : { x: 452, y: 30, w: 180, roof: "444,32 542,-30 640,32", gx: 542, gy: 16 };
+    // leak effects, one per location in use: [drip from x,y] → puddle at px
+    const LK = {
+      box: [262, 150, 262], house: [512, 112, 512], heater: [586, 150, 586],
+      well: [92, 134, 112], pipe: inHouse ? [124, 134, 124] : [140, 134, 140],
+    };
+    const locs = [...new Set(this._leaks().map((l) => l.loc))].filter((l) => LK[l]);
+    const leakFx = locs.map((l) => {
+      const [sx, sy, px] = LK[l];
+      return `<g class="lkfx" id="lk-${l}" style="display:none">
+        <ellipse class="lkpud tb" cx="${px}" cy="169" rx="26" ry="4.5" fill="${C.water}"/>
+        <path class="lkdrop tb" style="--dy:${169 - sy - 6}px" d="M${sx},${sy} c-3,4 -4,6 -4,7.5 a4,4 0 0 0 8,0 c0,-1.5 -1,-3.5 -4,-7.5 z" fill="${C.water}"/>
+        <circle class="lkring" cx="${px}" cy="166" r="20" fill="none" stroke="${C.bad}" stroke-width="2.5"/>
+      </g>`;
+    }).join("");
 
     return `
     <svg class="diagram" viewBox="0 -40 640 320" role="img" aria-label="${t("title")}">
@@ -542,21 +607,20 @@ class WaterSystemCard extends HTMLElement {
 
       <rect x="0" y="172" width="640" height="108" fill="url(#soil)"/>${stones}
       <rect x="0" y="170" width="640" height="4" rx="2" fill="#65a30d" opacity=".6"/>
-      ${c.outdoor_temp ? `<g ${info(c.outdoor_temp)}><text x="6" y="-14" style="font-size:16px">${t("out")}</text><text id="otemp" x="6" y="8" class="val" style="font-size:22px"></text></g>` : ""}
+      ${c.outdoor_temp ? `<g ${info(c.outdoor_temp)}>${labels ? `<text x="6" y="-14" style="font-size:16px">${t("out")}</text>` : ""}<text id="otemp" x="6" y="8" class="val" style="font-size:22px"></text></g>` : ""}
 
       <g ${info(c.well_level)}>
         <rect x="44" y="118" width="42" height="154" rx="6" fill="${faint}" stroke="${muted}" stroke-width="2"/>
         <rect id="wellw" x="47" y="200" width="36" height="68" rx="3" fill="url(#wg)" opacity=".75"/>
         <rect x="38" y="111" width="54" height="10" rx="3" fill="${muted}"/>
-        <text x="65" y="98" text-anchor="middle">${t("well")}</text>
+        ${labels ? `<text x="65" y="98" text-anchor="middle">${t("well")}</text>` : ""}
         ${c.well_level ? `<text id="wellv" x="96" y="204" class="val"></text>` : ""}
       </g>
 
-      ${inHouse ? `<rect x="168" y="20" width="290" height="152" rx="4" fill="${faint}" stroke="${muted}" stroke-width="2"/>
-      <rect x="160" y="12" width="300" height="10" rx="3" fill="${roof}"/>` : ""}
-      <polygon points="444,34 542,-30 640,34" fill="${roof}"/>
-      <rect x="452" y="30" width="180" height="142" rx="4" fill="${inHouse ? "transparent" : faint}" stroke="${muted}" stroke-width="2"/>
-      ${inHouse ? `<rect x="452" y="30" width="180" height="142" fill="${faint}"/>` : ""}
+      <polygon points="${hb.roof}" fill="${roof}" stroke-linejoin="round"/>
+      <rect x="${hb.x}" y="${hb.y}" width="${hb.w}" height="${172 - hb.y}" rx="4" fill="${faint}" stroke="${muted}" stroke-width="2"/>
+      ${inHouse ? `<line x1="452" y1="${hb.y + 2}" x2="452" y2="170" stroke="${muted}" stroke-width="2" stroke-dasharray="5 5"/>` : ""}
+      ${labels ? `<text x="${hb.gx}" y="${hb.gy}" text-anchor="middle" style="font-size:16px">${t("house")}</text>` : ""}
 
       ${c.heat_trace ? `<path id="htrace" ${info(c.heat_trace)} class="trace" d="${outdoorPipe}"/>` : ""}
       <path class="pipe-base" d="M65,232 V130 H214"/>
@@ -575,7 +639,7 @@ class WaterSystemCard extends HTMLElement {
 
       <g ${info(c.temperature || c.pressure)}>
         ${inHouse ? "" : `<rect id="box" x="176" y="46" width="138" height="126" rx="12" fill="${faint}" stroke="${muted}" stroke-width="2" stroke-dasharray="7 5" style="transition:stroke .3s"/>`}
-        <text x="245" y="${inHouse ? 46 : 38}" text-anchor="middle">${t("tank")}</text>
+        ${labels ? `<text x="245" y="${inHouse ? 46 : 38}" text-anchor="middle">${t("tank")}</text>` : ""}
         <rect x="214" y="56" width="62" height="94" rx="26" fill="url(#metal)"/>
         <g clip-path="url(#tankclip)">
           <g id="lvl" class="tb" style="transform:translateY(120px)">
@@ -586,10 +650,10 @@ class WaterSystemCard extends HTMLElement {
         <rect x="214" y="56" width="62" height="94" rx="26" fill="none" stroke="${muted}" stroke-width="2.5"/>
         <path d="M222,72 Q245,66 268,72" stroke="#fff" stroke-width="2.5" fill="none" opacity=".25" stroke-linecap="round"/>
         <g id="fguard" style="display:none" ${info(c.frost_guard)}>
-          <rect x="${inHouse ? 296 : 286}" y="146" width="20" height="20" rx="4" fill="${C.heat}" opacity=".9"/>
-          <path d="M${inHouse ? 301 : 291},160 q2,-3 0,-6 t0,-6 M${inHouse ? 306 : 296},160 q2,-3 0,-6 t0,-6 M${inHouse ? 311 : 301},160 q2,-3 0,-6 t0,-6" stroke="#fff" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+          <rect x="286" y="146" width="20" height="20" rx="4" fill="${C.heat}" opacity=".9"/>
+          <path d="M291,160 q2,-3 0,-6 t0,-6 M296,160 q2,-3 0,-6 t0,-6 M301,160 q2,-3 0,-6 t0,-6" stroke="#fff" stroke-width="1.8" fill="none" stroke-linecap="round"/>
         </g>
-        ${c.temperature ? `<text id="ttemp" x="245" y="204" text-anchor="middle" class="val"></text>` : ""}
+        ${c.temperature ? `<text id="ttemp" x="245" y="167" text-anchor="middle" class="val" style="font-size:17px"></text>` : ""}
       </g>
 
       <g ${info(c.pressure)}>
@@ -605,32 +669,28 @@ class WaterSystemCard extends HTMLElement {
         <text x="${cx}" y="123" text-anchor="middle" style="font-size:13px">bar</text>
       </g>
 
-      <g id="valve" ${info(c.valve)} transform="translate(478,130)" style="--vc:${C.ok}">
+      ${c.valve ? `<g id="valve" ${info(c.valve)} transform="translate(${inHouse ? 300 : 478},130)" style="--vc:${C.ok}">
         <path d="M-11,-10 L11,10 L11,-10 L-11,10 Z" style="fill:var(--vc)"/>
         <line x1="0" y1="0" x2="0" y2="-18" style="stroke:var(--vc)" stroke-width="3"/>
         <rect x="-8" y="-22" width="16" height="5" rx="2.5" style="fill:var(--vc)"/>
-      </g>
+      </g>` : ""}
 
       <g id="tap">
         <rect x="514" y="60" width="32" height="9" rx="3" fill="${fixture}"/>
         <rect x="508" y="60" width="8" height="17" rx="3" fill="${fixture}"/>
         <path class="drip" d="M512,80 c-3,4 -4,6 -4,7.5 a4,4 0 0 0 8,0 c0,-1.5 -1,-3.5 -4,-7.5 z" fill="${C.water}"/>
         <path d="M490,94 h44 v4 a12,12 0 0 1 -12,12 h-20 a12,12 0 0 1 -12,-12 z" fill="${fixture}" opacity=".7"/>
+        <rect x="508" y="110" width="8" height="60" fill="${fixture}" opacity=".35"/>
       </g>
-      <text x="512" y="204" text-anchor="middle">${t("house")}</text>
       ${hasWh ? `
       <g id="wh" ${info(c.water_heater || c.water_heater_temp || c.water_heater_power)}>
         <rect class="glow" x="576" y="74" width="48" height="98" rx="18" fill="${C.hot}"/>
         <rect x="582" y="80" width="36" height="86" rx="14" fill="url(#metal)" stroke="${muted}" stroke-width="2"/>
         <rect id="whfill" x="585" y="83" width="30" height="80" rx="11" fill="url(#hg)" opacity=".6" style="transition:opacity .4s"/>
-        <text id="whtemp" x="600" y="204" text-anchor="middle" class="val"></text>
+        <text id="whtemp" x="600" y="130" text-anchor="middle" class="whv"></text>
         <g id="legb" style="display:none"><circle cx="618" cy="82" r="11" fill="${C.warn}"/><text x="618" y="88" text-anchor="middle" style="fill:#fff;font-size:15px;font-weight:700">L</text></g>
       </g>` : ""}
-
-      <g id="leakm" style="display:none">
-        <circle cx="470" cy="-12" r="13" fill="${C.bad}"><animate attributeName="opacity" values="1;.35;1" dur="1s" repeatCount="indefinite"/></circle>
-        <text x="470" y="-5" text-anchor="middle" style="fill:#fff;font-weight:700">!</text>
-      </g>
+      ${leakFx}
     </svg>`;
   }
 
@@ -649,20 +709,24 @@ class WaterSystemCard extends HTMLElement {
       </div>`);
     this._set(this._el.banners, this._banners(m));
     this._updDiagram(m);
-    this._set(this._el.tiles, this._tiles(m));
-    const sh = this._statsHtml(m), hh = this._histHtml(m);
+    this._set(this._el.tiles, c.show_tiles === false ? "" : this._tiles(m));
+    const sh = c.show_stats === false ? "" : this._statsHtml(m), hh = c.show_history === false ? "" : this._histHtml(m);
     this._set(this._el.stats, sh || hh ? `<div class="panel">${sh}${sh && hh ? '<div class="sep"></div>' : ""}${hh}</div>` : "");
-    this._set(this._el.ctrls, this._controls(m));
+    this._set(this._el.ctrls, c.show_controls === false ? "" : this._controls(m));
   }
 
   _banners(m) {
     const c = this._config, out = [];
     const b = (col, icon, txt) => out.push(`<div class="banner" style="--c:${col}"><ha-icon icon="${icon}"></ha-icon><span>${esc(txt)}</span></div>`);
     const tu = (v, id) => `${this._fmt(v)}${this._unit(id) || "°C"}`;
-    if (m.leak) b(C.bad, "mdi:water-alert", this._t("b_leak"));
+    if (m.leak) {
+      const names = [...new Set(m.leaks.map((l) => l.name || (this._st(l.id) || {}).attributes?.friendly_name || this._t(`loc_${l.loc}`)))];
+      b(C.bad, "mdi:water-alert", this._t("b_leak_at", names.join(", ")));
+    }
     if (m.guard) b(C.bad, "mdi:engine-off", this._t("b_guard"));
     if (m.stats && m.stats.longRun) b(C.bad, "mdi:timer-alert", this._t("b_long", this._dur(m.stats.runFor, false)));
-    if (m.frost) b(C.frost, "mdi:snowflake-alert", this._t("b_frost", tu(m.temp, c.temperature)) + (m.guardOn === false ? this._t("b_frost_off") : ""));
+    if (m.frost) b(C.frost, "mdi:snowflake-alert", this._t("b_frost", tu(m.temp, c.temperature)) + (m.guardOn === false ? this._t("b_frost_off") : m.guardOn ? this._t("b_frost_weak") : ""));
+    if (m.guardWarn) b(C.frost, "mdi:radiator-off", this._t("b_guard_off", tu(m.temp, c.temperature)));
     if (m.traceWarn) b(C.frost, "mdi:snowflake-thermometer", this._t("b_trace", tu(m.outT, c.outdoor_temp)));
     if (m.lowPressure && !m.leak && !m.guard) b(C.warn, "mdi:gauge-low", this._t("b_low", this._fmt(m.lowP)));
     if (m.stats && m.stats.shortCycle && !m.leak) b(C.warn, "mdi:sync-alert", this._t("b_short", this._dur(m.stats.median)));
@@ -686,9 +750,10 @@ class WaterSystemCard extends HTMLElement {
     pump.classList.toggle("trip", !!m.guard);
     q("pw1").classList.toggle("flow", !!m.running);
     ["pw2", "pw3", "pw4"].forEach((id) => { const e = q(id); if (e) { e.classList.toggle("flow", !!m.flowing); e.style.opacity = m.valveOpen ? "" : ".12"; } });
-    q("valve").style.setProperty("--vc", m.valveOpen ? C.ok : C.bad);
+    if (q("valve")) q("valve").style.setProperty("--vc", m.valveOpen ? C.ok : C.bad);
     q("tap").classList.toggle("on", !!m.flowing);
-    q("leakm").style.display = m.leak ? "" : "none";
+    const active = new Set(m.leaks.map((l) => l.loc));
+    this.shadowRoot.querySelectorAll(".lkfx").forEach((g) => { g.style.display = active.has(g.id.slice(3)) ? "" : "none"; });
 
     const wf = m.well == null ? 0.55 : clamp(m.well / 100, 0.05, 1);
     const wy = 268 - 140 * wf;
@@ -704,7 +769,7 @@ class WaterSystemCard extends HTMLElement {
       q("ttemp").style.fill = m.frost ? C.frost : "";
     }
     q("fguard").style.display = m.guardOn ? "" : "none";
-    if (q("box")) q("box").style.stroke = m.guardOn ? C.heat : m.frost ? C.frost : "";
+    if (q("box")) q("box").style.stroke = m.frost || m.guardWarn ? C.frost : m.guardOn ? C.heat : "";
     if (q("htrace")) {
       q("htrace").classList.toggle("on", !!m.traceOn);
       q("htrace").classList.toggle("warn", !!m.traceWarn);
@@ -717,8 +782,7 @@ class WaterSystemCard extends HTMLElement {
       q("hg1").setAttribute("stop-color", cols[0]);
       q("hg2").setAttribute("stop-color", cols[1]);
       q("whfill").setAttribute("opacity", w.on === false ? "0.2" : "0.85");
-      q("whtemp").textContent = w.temp == null ? "" : `${this._fmt(w.temp, 0)}°${w.target != null ? ` / ${this._fmt(w.target, 0)}°` : ""}`;
-      q("whtemp").style.fill = w.level === "cold" ? "#3b82f6" : w.level === "warm" ? C.warn : w.level === "hot" ? C.hot : "";
+      q("whtemp").textContent = w.temp == null ? "" : `${this._fmt(w.temp, 0)}°`;
       q("legb").style.display = w.legRisk ? "" : "none";
     }
   }
@@ -812,16 +876,17 @@ class WaterSystemCard extends HTMLElement {
       const unavailable = BAD_STATES.includes(s.state);
       const label = unavailable ? this._t("unavail") : opts.stateText ? opts.stateText(on) : on ? this._t(opts.valve ? "open" : "on") : this._t(opts.valve ? "closed" : "off");
       const armed = this._armed === id;
-      const needConfirm = c.confirm !== false && opts.confirmWhenOn && on;
+      const cf = c.confirm;
+      const needConfirm = on && opts.key && (cf === true || (Array.isArray(cf) && cf.includes(opts.key)));
       out.push(`<button class="btn ${armed ? "armed" : on ? "on" : opts.offBad ? "off-bad" : ""}" ${opts.col ? `style="--c:${opts.col}"` : ""}
         data-action="${esc(id)}" ${needConfirm ? 'data-confirm="1"' : ""} ${unavailable ? "disabled" : ""}>
         <ha-icon icon="${on ? iconOn : iconOff}"></ha-icon>${armed ? esc(this._t("confirm")) : `${esc(name)} <small>${esc(label)}</small>`}</button>`);
     };
-    mk(c.pump_switch, this._t("c_pump"), "mdi:water-pump", "mdi:water-pump-off", { confirmWhenOn: true, col: C.water });
-    mk(c.valve, this._t("c_valve"), "mdi:valve-open", "mdi:valve-closed", { confirmWhenOn: true, offBad: true, col: C.ok, valve: true });
-    mk(c.frost_guard, this._t("c_guard"), "mdi:radiator", "mdi:radiator-off", { col: C.heat });
-    mk(c.heat_trace, this._t("c_trace"), "mdi:heating-coil", "mdi:heating-coil", { col: C.heat, offBad: m.traceWarn });
-    mk(c.water_heater, this._t("c_wh"), "mdi:water-boiler", "mdi:water-boiler-off", { col: C.hot, stateText: (on) => (m.wh && m.wh.heating ? this._t("heating") : this._t(on ? "on" : "off")) });
+    mk(c.pump_switch, this._t("c_pump"), "mdi:water-pump", "mdi:water-pump-off", { key: "pump", col: C.water });
+    mk(c.valve, this._t("c_valve"), "mdi:valve-open", "mdi:valve-closed", { key: "valve", offBad: true, col: C.ok, valve: true });
+    mk(c.frost_guard, this._t("c_guard"), "mdi:radiator", "mdi:radiator-off", { key: "frost_guard", col: C.heat });
+    mk(c.heat_trace, this._t("c_trace"), "mdi:heating-coil", "mdi:heating-coil", { key: "heat_trace", col: C.heat, offBad: m.traceWarn });
+    mk(c.water_heater, this._t("c_wh"), "mdi:water-boiler", "mdi:water-boiler-off", { key: "water_heater", col: C.hot, stateText: (on) => (m.wh && m.wh.heating ? this._t("heating") : this._t(on ? "on" : "off")) });
     (c.buttons || []).forEach((b) => {
       const s = this._st(b.entity);
       if (!s) return;
@@ -836,10 +901,19 @@ class WaterSystemCard extends HTMLElement {
 // ---------- visual editor ----------
 const num = (unit, min, max, step) => ({ number: { min, max, step, mode: "box", unit_of_measurement: unit } });
 const ent = (domain, extra = {}) => ({ entity: { domain, ...extra } });
+const bool = (name) => ({ name, selector: { boolean: {} } });
+const CONFIRM_KEYS = ["pump", "valve", "frost_guard", "heat_trace", "water_heater"];
 const EDITOR_SCHEMA = [
   { name: "name", selector: { text: {} } },
   { name: "tank_location", selector: { select: { mode: "dropdown", options: [
     { value: "box", label: "Separate tank box (outside)" }, { value: "house", label: "Inside the house" }] } } },
+  { type: "expandable", name: "", title: "Features (show / hide)", flatten: true, schema: [
+    { type: "grid", name: "", schema: [
+      bool("show_valve"), bool("show_pump_guard"), bool("show_frost_guard"), bool("show_heat_trace"),
+      bool("show_water_heater"), bool("show_leak"), bool("show_outdoor"), bool("show_labels"),
+      bool("show_tiles"), bool("show_stats"), bool("show_history"), bool("show_controls"),
+    ] },
+  ] },
   { type: "expandable", name: "", title: "Pump and pressure", flatten: true, expanded: true, schema: [
     { name: "pressure", selector: ent("sensor") },
     { name: "pump_power", selector: ent("sensor") },
@@ -849,63 +923,79 @@ const EDITOR_SCHEMA = [
     { name: "pump_switch", selector: ent(["switch", "input_boolean"]) },
     { name: "valve", selector: ent(["valve", "switch"]) },
   ] },
-  { type: "expandable", name: "", title: "Frost, leaks and usage", flatten: true, schema: [
+  { type: "expandable", name: "", title: "Frost protection and usage", flatten: true, schema: [
     { name: "temperature", selector: ent("sensor") },
     { name: "outdoor_temp", selector: ent("sensor") },
     { name: "frost_guard", selector: ent(["switch", "climate", "input_boolean", "binary_sensor"]) },
     { name: "heat_trace", selector: ent(["switch", "climate", "input_boolean", "binary_sensor"]) },
-    { name: "leak", selector: ent("binary_sensor", { multiple: true }) },
     { name: "flow", selector: ent("sensor") },
     { name: "water_today", selector: ent("sensor") },
     { name: "well_level", selector: ent("sensor") },
+  ] },
+  { type: "expandable", name: "", title: "Leak sensors (by location)", flatten: true, schema: [
+    { name: "leak_box", selector: ent("binary_sensor", { multiple: true }) },
+    { name: "leak_house", selector: ent("binary_sensor", { multiple: true }) },
+    { name: "leak_heater", selector: ent("binary_sensor", { multiple: true }) },
+    { name: "leak_well", selector: ent("binary_sensor", { multiple: true }) },
+    { name: "leak_pipe", selector: ent("binary_sensor", { multiple: true }) },
   ] },
   { type: "expandable", name: "", title: "Water heater", flatten: true, schema: [
     { name: "water_heater", selector: ent(["water_heater", "switch", "climate"]) },
     { name: "water_heater_temp", selector: ent("sensor") },
     { name: "water_heater_power", selector: ent("sensor") },
     { name: "water_heater_energy", selector: ent("sensor") },
+  ] },
+  { type: "expandable", name: "", title: "Alert levels", flatten: true, schema: [
     { type: "grid", name: "", schema: [
+      { name: "min_temp", selector: num("°C", -10, 15, 0.5) },
+      { name: "guard_warn_temp", selector: num("°C", -10, 20, 0.5) },
+      { name: "trace_warn_temp", selector: num("°C", -25, 20, 0.5) },
+      { name: "low_pressure", selector: num("bar", 0, 10, 0.1) },
+      { name: "max_run_minutes", selector: num("min", 1, 240, 1) },
+      { name: "short_cycle_seconds", selector: num("s", 5, 300, 5) },
+      { name: "guard_delay", selector: num("s", 10, 900, 10) },
+      { name: "night_starts_warn", selector: num("", 1, 20, 1) },
+      { name: "night_start", selector: num("h", 0, 23, 1) },
+      { name: "night_end", selector: num("h", 1, 23, 1) },
       { name: "water_heater_low_temp", selector: num("°C", 20, 70, 1) },
       { name: "water_heater_ok_temp", selector: num("°C", 30, 90, 1) },
       { name: "legionella_temp", selector: num("°C", 55, 85, 1) },
       { name: "legionella_days", selector: num("d", 1, 30, 1) },
     ] },
   ] },
-  { type: "expandable", name: "", title: "Thresholds", flatten: true, schema: [
+  { type: "expandable", name: "", title: "Pump and pressure settings", flatten: true, schema: [
     { type: "grid", name: "", schema: [
       { name: "cut_in", selector: num("bar", 0, 10, 0.1) },
       { name: "cut_out", selector: num("bar", 0, 10, 0.1) },
       { name: "max_pressure", selector: num("bar", 1, 16, 1) },
-      { name: "min_temp", selector: num("°C", -10, 15, 0.5) },
-      { name: "trace_warn_temp", selector: num("°C", -20, 10, 0.5) },
       { name: "power_threshold", selector: num("W", 0, 5000, 10) },
       { name: "current_threshold", selector: num("A", 0, 20, 0.1) },
-      { name: "max_run_minutes", selector: num("min", 1, 240, 1) },
-      { name: "short_cycle_seconds", selector: num("s", 5, 300, 5) },
-      { name: "guard_delay", selector: num("s", 10, 900, 10) },
-      { name: "night_start", selector: num("h", 0, 23, 1) },
-      { name: "night_end", selector: num("h", 1, 23, 1) },
-      { name: "night_starts_warn", selector: num("", 1, 20, 1) },
       { name: "history_hours", selector: num("h", 1, 168, 1) },
     ] },
-    { name: "confirm", selector: { boolean: {} } },
+    { name: "confirm", selector: { select: { multiple: true, mode: "list", options: [
+      { value: "pump", label: "Pump off" }, { value: "valve", label: "Close main valve" }, { value: "frost_guard", label: "Frost guard off" },
+      { value: "heat_trace", label: "Heat cable off" }, { value: "water_heater", label: "Water heater off" }] } } },
   ] },
 ];
 const EDITOR_LABELS = {
   name: "Title", tank_location: "Pressure tank location", pressure: "Pressure sensor", pump_power: "Pump power (W)", pump_current: "Pump current (A)",
   pump_running: "Pump running (binary sensor)", pump_guard: "Pump guard alarm (binary sensor)", pump_switch: "Pump switch",
   valve: "Main valve", temperature: "Tank box / tank room temperature", outdoor_temp: "Outdoor temperature",
-  frost_guard: "Frost guard in tank box", heat_trace: "Heat cable on outdoor pipes", leak: "Leak sensors",
+  frost_guard: "Frost guard in tank box", heat_trace: "Heat cable on outdoor pipes",
+  leak_box: "Leak sensors – tank box", leak_house: "Leak sensors – house / kitchen / bathroom", leak_heater: "Leak sensors – under water heater",
+  leak_well: "Leak sensors – well / pump house", leak_pipe: "Leak sensors – outdoor pipe",
   flow: "Flow sensor", water_today: "Water used today", well_level: "Well level",
   water_heater: "Water heater (entity or switch)", water_heater_temp: "Hot water temperature", water_heater_power: "Water heater power",
-  water_heater_energy: "Water heater energy today", water_heater_low_temp: "Low hot water below", water_heater_ok_temp: "Hot from",
+  water_heater_energy: "Water heater energy today", water_heater_low_temp: "Low hot water below", water_heater_ok_temp: "Hot water OK from",
   legionella_temp: "Legionella temperature", legionella_days: "Must reach it every",
-  cut_in: "Cut-in pressure", cut_out: "Cut-out pressure", max_pressure: "Gauge max", min_temp: "Frost warning below",
-  trace_warn_temp: "Heat cable warning below (outdoor)",
-  power_threshold: "Pump running above (W)", current_threshold: "Pump running above (A)", max_run_minutes: "Max run time",
+  cut_in: "Cut-in pressure", cut_out: "Cut-out pressure", max_pressure: "Gauge max", low_pressure: "Low pressure below (empty = cut-in − 0.5)",
+  min_temp: "Frost alarm: tank box below", guard_warn_temp: "Warn if frost guard off below", trace_warn_temp: "Warn if heat cable off when outside below",
+  power_threshold: "Pump running above (W)", current_threshold: "Pump running above (A)", max_run_minutes: "Max pump run time",
   short_cycle_seconds: "Short cycle if run shorter than", guard_delay: "Pump-stopped alarm after",
   night_start: "Night from (hour)", night_end: "Night to (hour)", night_starts_warn: "Warn at night starts ≥", history_hours: "History length",
-  confirm: "Confirm before closing valve or stopping pump",
+  confirm: "Ask 'are you sure' before", show_valve: "Main valve", show_pump_guard: "Pump guard (KM 35)", show_frost_guard: "Frost guard",
+  show_heat_trace: "Heat cable", show_water_heater: "Water heater", show_leak: "Leak sensors", show_outdoor: "Outdoor temperature",
+  show_labels: "Labels in drawing", show_tiles: "Value tiles", show_stats: "Pump statistics", show_history: "History graph", show_controls: "Buttons",
 };
 
 class WaterSystemCardEditor extends HTMLElement {
@@ -918,14 +1008,28 @@ class WaterSystemCardEditor extends HTMLElement {
       this._form.computeLabel = (s) => EDITOR_LABELS[s.name] || s.title || s.name;
       this._form.addEventListener("value-changed", (ev) => {
         const cfg = { ...ev.detail.value };
-        Object.keys(cfg).forEach((k) => { const v = cfg[k]; if (v === "" || v == null || (Array.isArray(v) && !v.length)) delete cfg[k]; });
+        Object.keys(cfg).forEach((k) => {
+          const v = cfg[k];
+          if (v === "" || v == null || (Array.isArray(v) && !v.length && k !== "confirm")) delete cfg[k];
+          else if (k in DEFAULTS && JSON.stringify(v) === JSON.stringify(DEFAULTS[k])) delete cfg[k];
+        });
+        if (Array.isArray(cfg.confirm) && cfg.confirm.length === CONFIRM_KEYS.length) delete cfg.confirm;
+
         this._config = cfg;
         this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: cfg }, bubbles: true, composed: true }));
       });
       this.appendChild(this._form);
     }
-    const data = { ...this._config };
-    if (typeof data.leak === "string") data.leak = [data.leak];
+    const data = { ...DEFAULTS, ...this._config };
+    Object.keys(data).forEach((k) => { if (data[k] === null) delete data[k]; });
+    if (data.confirm === true) data.confirm = [...CONFIRM_KEYS];
+    else if (data.confirm === false) data.confirm = [];
+    LEAK_LOCS.forEach((l) => { if (typeof data[`leak_${l}`] === "string") data[`leak_${l}`] = [data[`leak_${l}`]]; });
+    const plain = (Array.isArray(data.leak) ? data.leak : [data.leak]).filter((x) => typeof x === "string");
+    if (plain.length && plain.length === (Array.isArray(data.leak) ? data.leak.length : 1)) {
+      data.leak_house = [...new Set([...(data.leak_house || []), ...plain])];
+      delete data.leak;
+    }
     this._form.hass = this._hass;
     this._form.schema = EDITOR_SCHEMA;
     this._form.data = data;

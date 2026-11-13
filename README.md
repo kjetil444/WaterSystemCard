@@ -27,7 +27,7 @@ A Home Assistant Lovelace card for a private water supply: well with submersible
 ### Manual
 
 1. Copy `water-system-card.js` to `/config/www/`
-2. Settings → Dashboards → ⋮ → Resources → Add `/local/water-system-card.js?v=1.3.0` as **JavaScript module**
+2. Settings → Dashboards → ⋮ → Resources → Add `/local/water-system-card.js?v=1.4.0` as **JavaScript module**
 
 ## Configuration
 
@@ -48,7 +48,10 @@ temperature: sensor.bod_monitor_pressure_tank_box
 outdoor_temp: sensor.bod_monitor_outside
 frost_guard: switch.frostvakt
 heat_trace: switch.varmekabel
-leak: [binary_sensor.leak_tank_box, binary_sensor.leak_water_heater]
+# leak sensors per location (box, house, heater, well, pipe) – shown as drip + puddle there
+leak_box: [binary_sensor.leak_tank_box]
+leak_heater: [binary_sensor.leak_water_heater]
+leak_house: [binary_sensor.leak_kitchen, binary_sensor.leak_bathroom]
 flow: sensor.water_flow
 water_today: sensor.water_today
 # water heater
@@ -61,7 +64,8 @@ cut_in: 2.0
 cut_out: 3.5
 max_pressure: 6
 min_temp: 3
-trace_warn_temp: 0
+trace_warn_temp: 5        # heat cable off and outside below this → warning
+guard_warn_temp: 5        # frost guard off and tank box below this → warning
 power_threshold: 50
 current_threshold: 0.5
 max_run_minutes: 20
@@ -75,7 +79,20 @@ water_heater_ok_temp: 60
 legionella_temp: 70
 legionella_days: 7
 history_hours: 24
-confirm: true
+confirm: [pump, valve, frost_guard, heat_trace, water_heater]   # or true / false
+# hide features
+show_valve: true
+show_pump_guard: true
+show_frost_guard: true
+show_heat_trace: true
+show_water_heater: true
+show_leak: true
+show_outdoor: true
+show_labels: true
+show_tiles: true
+show_stats: true
+show_history: true
+show_controls: true
 ```
 
 The legionella check reads hourly long-term statistics for `water_heater_temp`, so the sensor needs a `state_class` (ESPHome/most integrations set this for temperatures).
