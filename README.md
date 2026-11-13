@@ -27,7 +27,19 @@ A Home Assistant Lovelace card for a private water supply: well with submersible
 ### Manual
 
 1. Copy `water-system-card.js` to `/config/www/`
-2. Settings → Dashboards → ⋮ → Resources → Add `/local/water-system-card.js?v=1.4.0` as **JavaScript module**
+2. Settings → Dashboards → ⋮ → Resources → Add `/local/water-system-card.js?v=1.5.0` as **JavaScript module**
+
+## HA package (recommended)
+
+`packages/water_system.yaml` moves all alarm logic into Home Assistant, so alarms and notifications work 24/7 – also when no dashboard is open.
+It adds: alarm binary sensors, pump starts/run time/night starts, last-cycle and short-cycle detection, tank drawdown (pre-charge health),
+pump wear trend (7 d vs 30 d), legionella tracking, away mode (+ optional automatic valve close), actionable push notifications
+("Close main valve", "Turn on heat cable" …), optional automatic heat cable, and maintenance reminders. All thresholds are helpers you can change in the UI.
+
+1. `configuration.yaml` → `homeassistant: packages: !include_dir_named packages`
+2. Copy `packages/water_system.yaml` to `/config/packages/`
+3. Edit the entity IDs in **Water system config** and the notify service in `script.water_notify` (search `CHANGE ME`)
+4. Restart, then set `use_package: true` in the card
 
 ## Configuration
 
@@ -80,6 +92,18 @@ legionella_temp: 70
 legionella_days: 7
 history_hours: 24
 confirm: [pump, valve, frost_guard, heat_trace, water_heater]   # or true / false
+# package + extras
+use_package: true             # read alarms from packages/water_system.yaml
+compact: false                # header + drawing only, tap to expand
+away: input_boolean.water_away
+water_heater_volume: 200      # shows ≈ litres of 40 °C water and number of showers
+shower_liters: 60
+cold_water_temp: 8
+drawdown: sensor.water_tank_drawdown_avg       # filled in automatically with use_package
+drawdown_min: 15                               # warn if no package
+maintenance: [precharge, sample, uv, filter]   # or [{name, entity: input_datetime.x, interval_days}]
+show_events: true
+events_count: 8
 # hide features
 show_valve: true
 show_pump_guard: true

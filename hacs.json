@@ -2,5 +2,5 @@
   "name": "Water System Card",
   "filename": "water-system-card.js",
   "render_readme": true,
-  "homeassistant": "2024.8.0"
+  "homeassistant": "2024.10.0"
 }

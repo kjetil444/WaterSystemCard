@@ -1,0 +1,916 @@
+# =====================================================================================
+#  Water system package for Home Assistant  –  companion to water-system-card (v1.5)
+#
+#  Moves all alarm logic into HA so it works 24/7 (also when no dashboard is open):
+#  alarms, pump statistics, tank pre-charge health, pump wear trend, legionella,
+#  away mode, actionable push notifications, automatic heat cable and maintenance.
+#
+#  INSTALL
+#   1. configuration.yaml:
+#        homeassistant:
+#          packages: !include_dir_named packages
+#   2. Copy this file to /config/packages/water_system.yaml
+#   3. Edit the entity IDs in "Water system config" below (leave '' for things you don't have)
+#   4. Edit the notify service in script.water_notify (search for CHANGE ME)
+#   5. Restart Home Assistant. Default thresholds are set once on first start; change them
+#      later under Settings → Helpers (turn off 'Water package initialized' to reset).
+#   6. In the card:  use_package: true
+#
+#  Requires Home Assistant 2024.10 or newer.
+# =====================================================================================
+
+# -------------------------------------------------------------------------------------
+# Thresholds and options (editable in the UI under Settings → Devices & services → Helpers)
+# -------------------------------------------------------------------------------------
+input_number:
+  water_cut_in:
+    name: Water cut-in pressure
+    min: 0.5
+    max: 8
+    step: 0.1
+    unit_of_measurement: bar
+    icon: mdi:gauge-low
+  water_pump_power_threshold:
+    name: Water pump running above
+    min: 5
+    max: 3000
+    step: 5
+    unit_of_measurement: W
+    icon: mdi:flash
+  water_pump_current_threshold:
+    name: Water pump running above (current)
+    min: 0.1
+    max: 20
+    step: 0.1
+    unit_of_measurement: A
+    icon: mdi:current-ac
+  water_guard_delay:
+    name: Water pump-stopped alarm delay
+    min: 10
+    max: 900
+    step: 10
+    unit_of_measurement: s
+    icon: mdi:timer-sand
+  water_max_run_minutes:
+    name: Water max pump run time
+    min: 1
+    max: 240
+    step: 1
+    unit_of_measurement: min
+    icon: mdi:timer-alert
+  water_short_cycle_seconds:
+    name: Water short cycle below
+    min: 5
+    max: 300
+    step: 5
+    unit_of_measurement: s
+    icon: mdi:sync-alert
+  water_min_temp:
+    name: Water frost alarm (tank box) below
+    min: -10
+    max: 15
+    step: 0.5
+    unit_of_measurement: "°C"
+    icon: mdi:snowflake-alert
+  water_guard_warn_temp:
+    name: Water frost guard off warning below
+    min: -10
+    max: 20
+    step: 0.5
+    unit_of_measurement: "°C"
+    icon: mdi:radiator-off
+  water_trace_warn_temp:
+    name: Water heat cable warning (outdoor) below
+    min: -25
+    max: 20
+    step: 0.5
+    unit_of_measurement: "°C"
+    icon: mdi:snowflake-thermometer
+  water_trace_auto_on_temp:
+    name: Water heat cable auto on below
+    min: -25
+    max: 15
+    step: 0.5
+    unit_of_measurement: "°C"
+    icon: mdi:heating-coil
+  water_night_start:
+    name: Water night window start
+    min: 0
+    max: 23
+    step: 1
+    unit_of_measurement: h
+  water_night_end:
+    name: Water night window end
+    min: 1
+    max: 23
+    step: 1
+    unit_of_measurement: h
+  water_night_starts_warn:
+    name: Water night starts warning at
+    min: 1
+    max: 20
+    step: 1
+    icon: mdi:weather-night
+  water_hot_low_temp:
+    name: Water hot water low below
+    min: 20
+    max: 70
+    step: 1
+    unit_of_measurement: "°C"
+    icon: mdi:water-thermometer-outline
+  water_legionella_temp:
+    name: Water legionella temperature
+    min: 55
+    max: 85
+    step: 1
+    unit_of_measurement: "°C"
+    icon: mdi:bacteria-outline
+  water_legionella_days:
+    name: Water legionella interval
+    min: 1
+    max: 30
+    step: 1
+    unit_of_measurement: d
+  water_drawdown_min:
+    name: Water tank drawdown warning below
+    min: 0
+    max: 500
+    step: 1
+    # 0 = off. Set to ~60 % of the normal drawdown once you know it
+    unit_of_measurement: L
+    icon: mdi:car-coolant-level
+  water_precharge_interval_days:
+    name: Water pre-charge check interval
+    min: 30
+    max: 1095
+    step: 1
+    unit_of_measurement: d
+  water_sample_interval_days:
+    name: Water sample interval
+    min: 90
+    max: 3650
+    step: 1
+    unit_of_measurement: d
+  water_uv_interval_days:
+    name: Water UV lamp interval
+    min: 30
+    max: 1095
+    step: 1
+    unit_of_measurement: d
+  water_filter_interval_days:
+    name: Water filter change interval
+    min: 14
+    max: 730
+    step: 1
+    unit_of_measurement: d
+
+input_boolean:
+  water_away:
+    name: Water away mode
+    icon: mdi:home-export-outline
+  water_away_close_valve:
+    name: Water close main valve when away
+    icon: mdi:valve-closed
+  water_auto_heat_cable:
+    name: Water automatic heat cable
+    icon: mdi:heating-coil
+  water_notifications:
+    name: Water notifications
+    icon: mdi:bell-ring
+  water_initialized:
+    name: Water package initialized
+    icon: mdi:check-circle-outline
+
+input_datetime:
+  water_last_precharge_check:
+    name: Water last pre-charge check
+    has_date: true
+    has_time: false
+  water_last_water_sample:
+    name: Water last water sample
+    has_date: true
+    has_time: false
+  water_last_uv_lamp:
+    name: Water last UV lamp change
+    has_date: true
+    has_time: false
+  water_last_filter_change:
+    name: Water last filter change
+    has_date: true
+    has_time: false
+
+# -------------------------------------------------------------------------------------
+# Template entities
+# -------------------------------------------------------------------------------------
+template:
+  # ---- 1. EDIT THIS: your entity IDs (use '' for things you don't have) ----
+  - sensor:
+      - name: Water system config
+        unique_id: water_system_config
+        icon: mdi:cog
+        state: "ok"
+        attributes:
+          pressure: "sensor.bod_monitor_pressure"          # bar (kPa/psi not converted here)
+          pump_power: "sensor.shelly_pro_em_pump_power"    # W  – or leave '' and use pump_current
+          pump_current: ""                                 # A
+          valve: "valve.main_water"                        # valve.* or switch.* (on = open). '' if none
+          tank_temp: "sensor.bod_monitor_pressure_tank_box"
+          outdoor_temp: "sensor.bod_monitor_outside"
+          frost_guard: "switch.frostvakt"                  # '' if not controllable/monitored
+          heat_trace: "switch.varmekabel"
+          leak_sensors: "binary_sensor.leak_tank_box, binary_sensor.leak_water_heater"   # comma separated
+          flow: ""                                         # L/min. '' if none
+          water_meter: ""                                  # total, litres. '' if none
+          water_meter_factor: "1"                          # 1 if meter is in L, 1000 if in m³
+          hot_water_temp: "sensor.vvb_temp"
+          water_heater: "switch.vvb"                       # switch.* or water_heater.*
+
+  # ---- pump state, alarms ----
+  - binary_sensor:
+      - name: Water pump running
+        unique_id: water_pump_running
+        device_class: running
+        icon: mdi:water-pump
+        state: >
+          {% set c = states.sensor.water_system_config.attributes if states.sensor.water_system_config is not none else {} %}
+          {% if c.get('pump_power', '') != '' %}
+            {{ states(c.pump_power) | float(0) >= states('input_number.water_pump_power_threshold') | float(50) }}
+          {% elif c.get('pump_current', '') != '' %}
+            {{ states(c.pump_current) | float(0) >= states('input_number.water_pump_current_threshold') | float(0.5) }}
+          {% else %}false{% endif %}
+
+      - name: Water pump tripped
+        unique_id: water_pump_tripped
+        device_class: problem
+        icon: mdi:engine-off
+        delay_on:
+          seconds: "{{ states('input_number.water_guard_delay') | int(90) }}"
+        state: >
+          {% set c = states.sensor.water_system_config.attributes if states.sensor.water_system_config is not none else {} %}
+          {% set p = states(c.get('pressure', '')) | float(-1) %}
+          {% set v = c.get('valve', '') %}
+          {% set valve_open = v == '' or states(v) in ['open', 'on', 'opening'] %}
+          {{ p >= 0 and p < states('input_number.water_cut_in') | float(2) - 0.2
+             and is_state('binary_sensor.water_pump_running', 'off') and valve_open }}
+
+      - name: Water pump long run
+        unique_id: water_pump_long_run
+        device_class: problem
+        icon: mdi:timer-alert
+        delay_on:
+          minutes: "{{ states('input_number.water_max_run_minutes') | int(20) }}"
+        state: "{{ is_state('binary_sensor.water_pump_running', 'on') }}"
+
+      - name: Water pump short cycling
+        unique_id: water_pump_short_cycling
+        device_class: problem
+        icon: mdi:sync-alert
+        state: >
+          {% set r = state_attr('sensor.water_pump_last_cycle', 'recent') or [] %}
+          {% set ns = namespace(d=[]) %}
+          {% for x in r if x[0] > as_timestamp(now()) - 7200 %}{% set ns.d = ns.d + [x[1]] %}{% endfor %}
+          {% set d = (ns.d[-4:]) | sort %}
+          {{ d | count >= 3 and d[(d | count) // 2] < states('input_number.water_short_cycle_seconds') | float(30) }}
+
+      - name: Water low pressure
+        unique_id: water_low_pressure
+        device_class: problem
+        icon: mdi:gauge-low
+        delay_on:
+          seconds: 30
+        state: >
+          {% set c = states.sensor.water_system_config.attributes if states.sensor.water_system_config is not none else {} %}
+          {% set p = states(c.get('pressure', '')) | float(-1) %}
+          {{ p >= 0 and p < states('input_number.water_cut_in') | float(2) - 0.5 }}
+
+      - name: Water leak
+        unique_id: water_leak
+        device_class: moisture
+        state: >
+          {% set c = states.sensor.water_system_config.attributes if states.sensor.water_system_config is not none else {} %}
+          {% set ids = c.get('leak_sensors', '').split(',') | map('trim') | select('ne', '') | list %}
+          {{ ids | select('is_state', 'on') | list | count > 0 }}
+        attributes:
+          active: >
+            {% set c = states.sensor.water_system_config.attributes if states.sensor.water_system_config is not none else {} %}
+            {% set ids = c.get('leak_sensors', '').split(',') | map('trim') | select('ne', '') | list %}
+            {{ ids | select('is_state', 'on') | map('state_attr', 'friendly_name') | list | join(', ') }}
+
+      - name: Water frost risk
+        unique_id: water_frost_risk
+        device_class: cold
+        state: >
+          {% set c = states.sensor.water_system_config.attributes if states.sensor.water_system_config is not none else {} %}
+          {% set t = states(c.get('tank_temp', '')) | float(99) %}
+          {{ t < states('input_number.water_min_temp') | float(3) }}
+
+      - name: Water frost guard off
+        unique_id: water_frost_guard_off
+        device_class: problem
+        icon: mdi:radiator-off
+        state: >
+          {% set c = states.sensor.water_system_config.attributes if states.sensor.water_system_config is not none else {} %}
+          {% set g = c.get('frost_guard', '') %}
+          {% set t = states(c.get('tank_temp', '')) | float(99) %}
+          {{ g != '' and is_state(g, 'off') and t < states('input_number.water_guard_warn_temp') | float(5)
+             and t >= states('input_number.water_min_temp') | float(3) }}
+
+      - name: Water heat cable off
+        unique_id: water_heat_cable_off
+        device_class: problem
+        icon: mdi:snowflake-thermometer
+        state: >
+          {% set c = states.sensor.water_system_config.attributes if states.sensor.water_system_config is not none else {} %}
+          {% set h = c.get('heat_trace', '') %}
+          {% set t = states(c.get('outdoor_temp', '')) | float(99) %}
+          {{ h != '' and is_state(h, 'off') and t < states('input_number.water_trace_warn_temp') | float(5) }}
+
+      - name: Water night activity
+        unique_id: water_night_activity
+        device_class: problem
+        icon: mdi:weather-night
+        state: "{{ states('sensor.water_pump_starts_night') | int(0) >= states('input_number.water_night_starts_warn') | int(4) }}"
+
+      - name: Water hot water low
+        unique_id: water_hot_water_low
+        device_class: problem
+        icon: mdi:water-thermometer-outline
+        state: >
+          {% set c = states.sensor.water_system_config.attributes if states.sensor.water_system_config is not none else {} %}
+          {% set wh = c.get('water_heater', '') %}
+          {% set t = states(c.get('hot_water_temp', '')) | float(99) %}
+          {{ t < states('input_number.water_hot_low_temp') | float(50) and (wh == '' or not is_state(wh, 'off')) }}
+
+      - name: Water legionella risk
+        unique_id: water_legionella_risk
+        device_class: problem
+        icon: mdi:bacteria-outline
+        state: >
+          {% set t = states('sensor.water_heater_last_legionella_heat') %}
+          {% if t in ['unknown', 'unavailable', 'none', ''] %}false
+          {% else %}{{ (now() - as_datetime(t)).total_seconds() > states('input_number.water_legionella_days') | float(7) * 86400 }}{% endif %}
+
+      - name: Water away alarm
+        unique_id: water_away_alarm
+        device_class: problem
+        icon: mdi:home-alert
+        delay_on:
+          seconds: 20
+        state: >
+          {% set c = states.sensor.water_system_config.attributes if states.sensor.water_system_config is not none else {} %}
+          {% set f = c.get('flow', '') %}
+          {{ is_state('input_boolean.water_away', 'on') and
+             (is_state('binary_sensor.water_pump_running', 'on') or (f != '' and states(f) | float(0) > 0.1)) }}
+
+      - name: Water tank precharge low
+        unique_id: water_tank_precharge_low
+        device_class: problem
+        icon: mdi:gauge-low
+        state: >
+          {% set lim = states('input_number.water_drawdown_min') | float(0) %}
+          {% set d = states('sensor.water_tank_drawdown_avg') | float(-1) %}
+          {{ lim > 0 and d >= 0 and d < lim }}
+
+      - name: Water pump wear trend
+        unique_id: water_pump_wear_trend
+        device_class: problem
+        icon: mdi:engine-outline
+        state: >
+          {% set c7 = states('sensor.water_pump_cycle_avg_7d') | float(0) %}
+          {% set c30 = states('sensor.water_pump_cycle_avg_30d') | float(0) %}
+          {% set p7 = states('sensor.water_pump_power_avg_7d') | float(0) %}
+          {% set p30 = states('sensor.water_pump_power_avg_30d') | float(0) %}
+          {{ (c30 > 0 and c7 > c30 * 1.25) or (p30 > 0 and p7 > p30 * 1.15) }}
+
+      - name: Water maintenance due
+        unique_id: water_maintenance_due
+        device_class: problem
+        icon: mdi:wrench-clock
+        state: >
+          {% set ns = namespace(due=[]) %}
+          {% for key, interval, label in [
+               ('water_last_precharge_check', 'water_precharge_interval_days', 'Fortrykk i tanken'),
+               ('water_last_water_sample', 'water_sample_interval_days', 'Vannprøve'),
+               ('water_last_uv_lamp', 'water_uv_interval_days', 'UV-lampe'),
+               ('water_last_filter_change', 'water_filter_interval_days', 'Filter')] %}
+            {% set d = states('input_datetime.' ~ key) %}
+            {% if d not in ['unknown', 'unavailable', ''] and as_datetime(d) is not none %}
+              {% if (now() - as_local(as_datetime(d))).days > states('input_number.' ~ interval) | int(365) %}
+                {% set ns.due = ns.due + [label] %}
+              {% endif %}
+            {% endif %}
+          {% endfor %}
+          {{ ns.due | count > 0 }}
+        attributes:
+          items: >
+            {% set ns = namespace(due=[]) %}
+            {% for key, interval, label in [
+                 ('water_last_precharge_check', 'water_precharge_interval_days', 'Fortrykk i tanken'),
+                 ('water_last_water_sample', 'water_sample_interval_days', 'Vannprøve'),
+                 ('water_last_uv_lamp', 'water_uv_interval_days', 'UV-lampe'),
+                 ('water_last_filter_change', 'water_filter_interval_days', 'Filter')] %}
+              {% set d = states('input_datetime.' ~ key) %}
+              {% if d not in ['unknown', 'unavailable', ''] and as_datetime(d) is not none %}
+                {% if (now() - as_local(as_datetime(d))).days > states('input_number.' ~ interval) | int(365) %}
+                  {% set ns.due = ns.due + [label] %}
+                {% endif %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.due }}
+
+  # ---- last time the hot water reached the legionella temperature ----
+  - triggers:
+      - trigger: template
+        value_template: >
+          {% set c = states.sensor.water_system_config.attributes if states.sensor.water_system_config is not none else {} %}
+          {{ states(c.get('hot_water_temp', '')) | float(0) >= states('input_number.water_legionella_temp') | float(70) }}
+    sensor:
+      - name: Water heater last legionella heat
+        unique_id: water_heater_last_legionella_heat
+        device_class: timestamp
+        icon: mdi:bacteria-outline
+        state: "{{ now().isoformat() }}"
+
+  # ---- duration of each pump cycle, with the last few kept for short-cycle detection ----
+  - triggers:
+      - trigger: state
+        entity_id: binary_sensor.water_pump_running
+        from: "on"
+        to: "off"
+    sensor:
+      - name: Water pump last cycle
+        unique_id: water_pump_last_cycle
+        unit_of_measurement: s
+        device_class: duration
+        state_class: measurement
+        icon: mdi:timer-outline
+        state: "{{ (trigger.to_state.last_changed - trigger.from_state.last_changed).total_seconds() | round(0) }}"
+        attributes:
+          recent: >
+            {% set d = (trigger.to_state.last_changed - trigger.from_state.last_changed).total_seconds() | round(0) | int %}
+            {% set prev = this.attributes.get('recent', []) if this is defined else [] %}
+            {{ (prev + [[as_timestamp(now()) | int, d]])[-8:] }}
+
+  # ---- pump power/current sampled only while it runs (for the wear trend) ----
+  - triggers:
+      - trigger: state
+        entity_id: binary_sensor.water_pump_running
+        to: "on"
+        for:
+          seconds: 15
+    sensor:
+      - name: Water pump running load
+        unique_id: water_pump_running_load
+        state_class: measurement
+        icon: mdi:flash
+        state: >
+          {% set c = states.sensor.water_system_config.attributes if states.sensor.water_system_config is not none else {} %}
+          {% if c.get('pump_power', '') != '' %}{{ states(c.pump_power) | float(0) }}
+          {% elif c.get('pump_current', '') != '' %}{{ states(c.pump_current) | float(0) }}
+          {% else %}0{% endif %}
+
+  # ---- tank drawdown: litres delivered between pump stop and next pump start ----
+  - triggers:
+      - trigger: state
+        entity_id: binary_sensor.water_pump_running
+        to: "on"
+        id: start
+      - trigger: state
+        entity_id: binary_sensor.water_pump_running
+        to: "off"
+        id: stop
+    sensor:
+      - name: Water tank drawdown
+        unique_id: water_tank_drawdown
+        unit_of_measurement: L
+        state_class: measurement
+        icon: mdi:car-coolant-level
+        state: >
+          {% set c = states.sensor.water_system_config.attributes if states.sensor.water_system_config is not none else {} %}
+          {% set mtr = c.get('water_meter', '') %}
+          {% set m = states(mtr) | float(-1) * c.get('water_meter_factor', '1') | float(1) if mtr != '' else -1 %}
+          {% set last = this.attributes.get('meter_at_stop', -1) | float(-1) if this is defined else -1 %}
+          {% if trigger.id == 'start' and m >= 0 and last >= 0 and m >= last %}{{ (m - last) | round(1) }}
+          {% else %}{{ this.state if this is defined and this.state not in ['unknown', 'unavailable'] else 'unknown' }}{% endif %}
+        attributes:
+          meter_at_stop: >
+            {% set c = states.sensor.water_system_config.attributes if states.sensor.water_system_config is not none else {} %}
+            {% set mtr = c.get('water_meter', '') %}
+            {% if trigger.id == 'stop' and mtr != '' %}{{ states(mtr) | float(-1) * c.get('water_meter_factor', '1') | float(1) }}
+            {% else %}{{ this.attributes.get('meter_at_stop', -1) if this is defined else -1 }}{% endif %}
+
+# -------------------------------------------------------------------------------------
+# Statistics and history
+# -------------------------------------------------------------------------------------
+sensor:
+  - platform: history_stats
+    name: Water pump starts today
+    unique_id: water_pump_starts_today
+    entity_id: binary_sensor.water_pump_running
+    state: "on"
+    type: count
+    start: "{{ today_at() }}"
+    end: "{{ now() }}"
+
+  - platform: history_stats
+    name: Water pump runtime today
+    unique_id: water_pump_runtime_today
+    entity_id: binary_sensor.water_pump_running
+    state: "on"
+    type: time
+    start: "{{ today_at() }}"
+    end: "{{ now() }}"
+
+  - platform: history_stats
+    name: Water pump starts night
+    unique_id: water_pump_starts_night
+    entity_id: binary_sensor.water_pump_running
+    state: "on"
+    type: count
+    start: >
+      {% set s = today_at() + timedelta(hours=states('input_number.water_night_start') | int(1)) %}
+      {{ s if now() >= s else s - timedelta(days=1) }}
+    end: >
+      {% set s = today_at() + timedelta(hours=states('input_number.water_night_start') | int(1)) %}
+      {% set s = s if now() >= s else s - timedelta(days=1) %}
+      {{ s + timedelta(hours=(states('input_number.water_night_end') | int(5)) - (states('input_number.water_night_start') | int(1))) }}
+
+  - platform: statistics
+    name: Water pump cycle avg 7d
+    unique_id: water_pump_cycle_avg_7d
+    entity_id: sensor.water_pump_last_cycle
+    state_characteristic: mean
+    max_age:
+      days: 7
+    sampling_size: 2000
+    precision: 0
+
+  - platform: statistics
+    name: Water pump cycle avg 30d
+    unique_id: water_pump_cycle_avg_30d
+    entity_id: sensor.water_pump_last_cycle
+    state_characteristic: mean
+    max_age:
+      days: 30
+    sampling_size: 8000
+    precision: 0
+
+  - platform: statistics
+    name: Water pump power avg 7d
+    unique_id: water_pump_power_avg_7d
+    entity_id: sensor.water_pump_running_load
+    state_characteristic: mean
+    max_age:
+      days: 7
+    sampling_size: 2000
+    precision: 1
+
+  - platform: statistics
+    name: Water pump power avg 30d
+    unique_id: water_pump_power_avg_30d
+    entity_id: sensor.water_pump_running_load
+    state_characteristic: mean
+    max_age:
+      days: 30
+    sampling_size: 8000
+    precision: 1
+
+  - platform: statistics
+    name: Water tank drawdown avg
+    unique_id: water_tank_drawdown_avg
+    entity_id: sensor.water_tank_drawdown
+    state_characteristic: mean
+    max_age:
+      days: 7
+    sampling_size: 2000
+    precision: 1
+
+# -------------------------------------------------------------------------------------
+# Notifications – one place to change where messages go
+# -------------------------------------------------------------------------------------
+script:
+  water_notify:
+    alias: Water – send notification
+    mode: queued
+    fields:
+      title: {description: Title}
+      message: {description: Message}
+      tag: {description: Notification tag}
+      actions: {description: Action buttons}
+      critical: {description: Break through silent mode}
+    sequence:
+      - condition: state
+        entity_id: input_boolean.water_notifications
+        state: "on"
+      - action: notify.notify            # CHANGE ME → e.g. notify.mobile_app_kjetils_iphone (or a notify group)
+        data:
+          title: "{{ title }}"
+          message: "{{ message }}"
+          data:
+            tag: "{{ tag | default('water') }}"
+            actions: "{{ actions | default([]) }}"
+            push:
+              interruption-level: "{{ 'critical' if critical | default(false) else 'active' }}"
+            ttl: 0
+            priority: high
+            channel: "{{ 'Vann alarm' if critical | default(false) else 'Vann' }}"
+
+  water_close_valve:
+    alias: Water – close main valve
+    sequence:
+      - variables:
+          v: "{{ state_attr('sensor.water_system_config', 'valve') }}"
+      - condition: template
+        value_template: "{{ v not in [none, ''] }}"
+      - action: "{{ 'valve.close_valve' if v.startswith('valve.') else 'switch.turn_off' }}"
+        target:
+          entity_id: "{{ v }}"
+
+  water_open_valve:
+    alias: Water – open main valve
+    sequence:
+      - variables:
+          v: "{{ state_attr('sensor.water_system_config', 'valve') }}"
+      - condition: template
+        value_template: "{{ v not in [none, ''] }}"
+      - action: "{{ 'valve.open_valve' if v.startswith('valve.') else 'switch.turn_on' }}"
+        target:
+          entity_id: "{{ v }}"
+
+automation:
+  # ---- first start: set default thresholds once (afterwards your own values are kept) ----
+  - id: water_init_defaults
+    alias: Water – set default thresholds (first start only)
+    triggers:
+      - trigger: homeassistant
+        event: start
+      - trigger: state
+        entity_id: input_boolean.water_initialized
+        to: "off"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.water_initialized
+        state: "off"
+    actions:
+      - delay: {seconds: 5}
+      - action: input_number.set_value
+        target: {entity_id: input_number.water_cut_in}
+        data: {value: 2.0}
+      - action: input_number.set_value
+        target: {entity_id: input_number.water_pump_power_threshold}
+        data: {value: 50}
+      - action: input_number.set_value
+        target: {entity_id: input_number.water_pump_current_threshold}
+        data: {value: 0.5}
+      - action: input_number.set_value
+        target: {entity_id: input_number.water_guard_delay}
+        data: {value: 90}
+      - action: input_number.set_value
+        target: {entity_id: input_number.water_max_run_minutes}
+        data: {value: 20}
+      - action: input_number.set_value
+        target: {entity_id: input_number.water_short_cycle_seconds}
+        data: {value: 30}
+      - action: input_number.set_value
+        target: {entity_id: input_number.water_min_temp}
+        data: {value: 3}
+      - action: input_number.set_value
+        target: {entity_id: input_number.water_guard_warn_temp}
+        data: {value: 5}
+      - action: input_number.set_value
+        target: {entity_id: input_number.water_trace_warn_temp}
+        data: {value: 5}
+      - action: input_number.set_value
+        target: {entity_id: input_number.water_trace_auto_on_temp}
+        data: {value: 3}
+      - action: input_number.set_value
+        target: {entity_id: input_number.water_night_start}
+        data: {value: 1}
+      - action: input_number.set_value
+        target: {entity_id: input_number.water_night_end}
+        data: {value: 5}
+      - action: input_number.set_value
+        target: {entity_id: input_number.water_night_starts_warn}
+        data: {value: 4}
+      - action: input_number.set_value
+        target: {entity_id: input_number.water_hot_low_temp}
+        data: {value: 50}
+      - action: input_number.set_value
+        target: {entity_id: input_number.water_legionella_temp}
+        data: {value: 70}
+      - action: input_number.set_value
+        target: {entity_id: input_number.water_legionella_days}
+        data: {value: 7}
+      - action: input_number.set_value
+        target: {entity_id: input_number.water_drawdown_min}
+        data: {value: 0}
+      - action: input_number.set_value
+        target: {entity_id: input_number.water_precharge_interval_days}
+        data: {value: 365}
+      - action: input_number.set_value
+        target: {entity_id: input_number.water_sample_interval_days}
+        data: {value: 1095}
+      - action: input_number.set_value
+        target: {entity_id: input_number.water_uv_interval_days}
+        data: {value: 365}
+      - action: input_number.set_value
+        target: {entity_id: input_number.water_filter_interval_days}
+        data: {value: 180}
+      - action: input_boolean.turn_on
+        target:
+          entity_id:
+            - input_boolean.water_notifications
+            - input_boolean.water_initialized
+  # ---- push notifications for every alarm, with action buttons ----
+  - id: water_alarm_notify
+    alias: Water – alarm notification
+    mode: queued
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.water_leak
+        to: "on"
+        id: leak
+      - trigger: state
+        entity_id: binary_sensor.water_away_alarm
+        to: "on"
+        id: away
+      - trigger: state
+        entity_id: binary_sensor.water_pump_tripped
+        to: "on"
+        id: tripped
+      - trigger: state
+        entity_id: binary_sensor.water_pump_long_run
+        to: "on"
+        id: long_run
+      - trigger: state
+        entity_id: binary_sensor.water_frost_risk
+        to: "on"
+        id: frost
+      - trigger: state
+        entity_id: binary_sensor.water_frost_guard_off
+        to: "on"
+        id: guard_off
+      - trigger: state
+        entity_id: binary_sensor.water_heat_cable_off
+        to: "on"
+        for: {minutes: 10}
+        id: trace_off
+      - trigger: state
+        entity_id: binary_sensor.water_low_pressure
+        to: "on"
+        for: {minutes: 2}
+        id: low_pressure
+      - trigger: state
+        entity_id: binary_sensor.water_pump_short_cycling
+        to: "on"
+        id: short_cycle
+      - trigger: state
+        entity_id: binary_sensor.water_night_activity
+        to: "on"
+        id: night
+      - trigger: state
+        entity_id: binary_sensor.water_hot_water_low
+        to: "on"
+        for: {minutes: 30}
+        id: hot_low
+      - trigger: state
+        entity_id: binary_sensor.water_legionella_risk
+        to: "on"
+        id: legionella
+      - trigger: state
+        entity_id: binary_sensor.water_tank_precharge_low
+        to: "on"
+        id: precharge
+      - trigger: state
+        entity_id: binary_sensor.water_pump_wear_trend
+        to: "on"
+        for: {hours: 12}
+        id: wear
+    variables:
+      msgs:
+        leak: ["💧 Vannlekkasje", "Lekkasje: {{ state_attr('binary_sensor.water_leak', 'active') }}. Steng hovedkranen?", true, [{"action": "WATER_CLOSE_VALVE", "title": "Steng hovedkran"}]]
+        away: ["🏠 Vann brukt mens dere er borte", "Pumpa går eller det renner vann mens bortemodus er på.", true, [{"action": "WATER_CLOSE_VALVE", "title": "Steng hovedkran"}]]
+        tripped: ["⚠️ Pumpe stoppet", "Lavt trykk og pumpa går ikke. Sjekk pumpevakten (EIL = tørrkjøring).", true, []]
+        long_run: ["⏱️ Pumpa går og går", "Pumpa har gått lenge uten stopp – mulig lekkasje eller lite vann i brønnen.", true, [{"action": "WATER_CLOSE_VALVE", "title": "Steng hovedkran"}]]
+        frost: ["❄️ Frostfare i tankkassen", "Tankkassen er {{ states(state_attr('sensor.water_system_config', 'tank_temp')) }} °C.", true, [{"action": "WATER_FROST_GUARD_ON", "title": "Slå på frostvakt"}, {"action": "WATER_HEAT_CABLE_ON", "title": "Slå på varmekabel"}]]
+        guard_off: ["❄️ Frostvakten er av", "Tankkassen er {{ states(state_attr('sensor.water_system_config', 'tank_temp')) }} °C og frostvakten er av.", false, [{"action": "WATER_FROST_GUARD_ON", "title": "Slå på frostvakt"}]]
+        trace_off: ["❄️ Varmekabelen er av", "Det er {{ states(state_attr('sensor.water_system_config', 'outdoor_temp')) }} °C ute og varmekabelen er av.", false, [{"action": "WATER_HEAT_CABLE_ON", "title": "Slå på varmekabel"}]]
+        low_pressure: ["Lavt vanntrykk", "Trykket er {{ states(state_attr('sensor.water_system_config', 'pressure')) }} bar.", false, []]
+        short_cycle: ["Pumpa starter ofte", "Korte pumpesykluser – sjekk fortrykket i trykktanken.", false, []]
+        night: ["🌙 Pumpestarter i natt", "Pumpa startet {{ states('sensor.water_pump_starts_night') }} ganger i natt – sjekk toaletter og kraner.", false, []]
+        hot_low: ["Lite varmtvann", "Varmtvannet er {{ states(state_attr('sensor.water_system_config', 'hot_water_temp')) }} °C.", false, [{"action": "WATER_HEATER_ON", "title": "Slå på bereder"}]]
+        legionella: ["🦠 Legionella", "Varmtvannet har ikke vært over {{ states('input_number.water_legionella_temp') | int }} °C på {{ states('input_number.water_legionella_days') | int }} dager.", false, []]
+        precharge: ["Trykktanken", "Tanken gir bare {{ states('sensor.water_tank_drawdown_avg') }} L per syklus – sjekk fortrykket.", false, []]
+        wear: ["Pumpe-slitasje?", "Pumpesyklusene er lengre / strømtrekket høyere enn 30-dagerssnittet.", false, []]
+      m: "{{ msgs[trigger.id] }}"
+    actions:
+      - action: script.water_notify
+        data:
+          title: "{{ m[0] }}"
+          message: "{{ m[1] }}"
+          critical: "{{ m[2] }}"
+          actions: "{{ m[3] }}"
+          tag: "water_{{ trigger.id }}"
+
+  # ---- handle the buttons in the notifications ----
+  - id: water_notification_actions
+    alias: Water – notification actions
+    mode: queued
+    triggers:
+      - trigger: event
+        event_type: mobile_app_notification_action
+        event_data: {action: WATER_CLOSE_VALVE}
+        id: close
+      - trigger: event
+        event_type: mobile_app_notification_action
+        event_data: {action: WATER_HEAT_CABLE_ON}
+        id: trace
+      - trigger: event
+        event_type: mobile_app_notification_action
+        event_data: {action: WATER_FROST_GUARD_ON}
+        id: guard
+      - trigger: event
+        event_type: mobile_app_notification_action
+        event_data: {action: WATER_HEATER_ON}
+        id: heater
+    actions:
+      - choose:
+          - conditions: "{{ trigger.id == 'close' }}"
+            sequence:
+              - action: script.water_close_valve
+          - conditions: "{{ trigger.id in ['trace', 'guard', 'heater'] }}"
+            sequence:
+              - variables:
+                  key: "{{ {'trace': 'heat_trace', 'guard': 'frost_guard', 'heater': 'water_heater'}[trigger.id] }}"
+                  ent: "{{ state_attr('sensor.water_system_config', key) }}"
+              - condition: template
+                value_template: "{{ ent not in [none, ''] }}"
+              - action: "{{ ent.split('.')[0] ~ '.turn_on' if ent.split('.')[0] in ['water_heater', 'climate'] else 'homeassistant.turn_on' }}"
+                target:
+                  entity_id: "{{ ent }}"
+
+  # ---- away mode: close / open the main valve (optional) ----
+  - id: water_away_valve
+    alias: Water – away mode valve
+    triggers:
+      - trigger: state
+        entity_id: input_boolean.water_away
+    conditions:
+      - condition: state
+        entity_id: input_boolean.water_away_close_valve
+        state: "on"
+    actions:
+      - if: "{{ trigger.to_state.state == 'on' }}"
+        then:
+          - action: script.water_close_valve
+        else:
+          - action: script.water_open_valve
+
+  # ---- automatic heat cable (optional, input_boolean.water_auto_heat_cable) ----
+  - id: water_auto_heat_cable
+    alias: Water – automatic heat cable
+    mode: restart
+    triggers:
+      - trigger: time_pattern
+        minutes: "/5"
+      - trigger: state
+        entity_id: input_boolean.water_auto_heat_cable
+        to: "on"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.water_auto_heat_cable
+        state: "on"
+      - "{{ state_attr('sensor.water_system_config', 'heat_trace') not in [none, ''] }}"
+      - "{{ states(state_attr('sensor.water_system_config', 'outdoor_temp')) | is_number }}"
+    actions:
+      - variables:
+          ht: "{{ state_attr('sensor.water_system_config', 'heat_trace') }}"
+          t: "{{ states(state_attr('sensor.water_system_config', 'outdoor_temp')) | float }}"
+          on_below: "{{ states('input_number.water_trace_auto_on_temp') | float(3) }}"
+      - choose:
+          - conditions: "{{ t < on_below and is_state(ht, 'off') }}"
+            sequence:
+              - action: homeassistant.turn_on
+                target: {entity_id: "{{ ht }}"}
+          - conditions: "{{ t > on_below + 2 and is_state(ht, 'on') }}"     # 2 °C hysteresis
+            sequence:
+              - action: homeassistant.turn_off
+                target: {entity_id: "{{ ht }}"}
+
+  # ---- maintenance reminder, once a day ----
+  - id: water_maintenance_reminder
+    alias: Water – maintenance reminder
+    triggers:
+      - trigger: time
+        at: "18:00:00"
+    conditions:
+      - condition: state
+        entity_id: binary_sensor.water_maintenance_due
+        state: "on"
+      - "{{ now().weekday() == 5 }}"     # Saturdays only
+    actions:
+      - action: script.water_notify
+        data:
+          title: "🔧 Vedlikehold vannanlegg"
+          message: "Forfalt: {{ state_attr('binary_sensor.water_maintenance_due', 'items') | join(', ') }}"
+          tag: water_maintenance

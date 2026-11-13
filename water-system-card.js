@@ -1,16 +1,34 @@
 /*
- * water-system-card  v1.4.0
+ * water-system-card  v1.5.0
  * Home Assistant custom Lovelace card: well → pump (with pump guard) → pressure tank → valve → house + water heater.
  * Self-contained, no HACS dependencies. Every entity is optional. Includes a visual editor.
  */
 
-const WSC_VERSION = "1.4.0";
+const WSC_VERSION = "1.5.0";
 const C = { water: "#38bdf8", ok: "#22c55e", warn: "#f59e0b", bad: "#ef4444", frost: "#60a5fa", heat: "#f97316", hot: "#f43f5e" };
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const ON_STATES = ["on", "open", "opening", "heat", "heating"];
 const BAD_STATES = ["unavailable", "unknown"];
 const LEAK_LOCS = ["box", "house", "heater", "well", "pipe"];
+// entities created by the companion HA package (packages/water_system.yaml)
+const PKG = {
+  tripped: "binary_sensor.water_pump_tripped", long_run: "binary_sensor.water_pump_long_run", short_cycle: "binary_sensor.water_pump_short_cycling",
+  low_pressure: "binary_sensor.water_low_pressure", frost: "binary_sensor.water_frost_risk", guard_off: "binary_sensor.water_frost_guard_off",
+  trace_off: "binary_sensor.water_heat_cable_off", night: "binary_sensor.water_night_activity", hot_low: "binary_sensor.water_hot_water_low",
+  legionella: "binary_sensor.water_legionella_risk", leak: "binary_sensor.water_leak", away_alarm: "binary_sensor.water_away_alarm",
+  precharge: "binary_sensor.water_tank_precharge_low", wear: "binary_sensor.water_pump_wear_trend", maint: "binary_sensor.water_maintenance_due",
+};
+const PKG_DEFAULTS = {
+  away: "input_boolean.water_away", drawdown: "sensor.water_tank_drawdown_avg", drawdown_warn: PKG.precharge,
+  cycle_avg_7d: "sensor.water_pump_cycle_avg_7d", cycle_avg_30d: "sensor.water_pump_cycle_avg_30d", pump_trend: PKG.wear,
+};
+const MAINT = {
+  precharge: { entity: "input_datetime.water_last_precharge_check", interval: "input_number.water_precharge_interval_days", days: 365, icon: "mdi:gauge" },
+  sample: { entity: "input_datetime.water_last_water_sample", interval: "input_number.water_sample_interval_days", days: 1095, icon: "mdi:test-tube" },
+  uv: { entity: "input_datetime.water_last_uv_lamp", interval: "input_number.water_uv_interval_days", days: 365, icon: "mdi:lightbulb-fluorescent-tube-outline" },
+  filter: { entity: "input_datetime.water_last_filter_change", interval: "input_number.water_filter_interval_days", days: 180, icon: "mdi:filter-outline" },
+};
 
 const DEFAULTS = {
   name: null,
@@ -50,6 +68,14 @@ const DEFAULTS = {
   show_stats: true,
   show_history: true,
   show_controls: true,
+  show_events: true,
+  use_package: false,            // read alarms from the companion HA package
+  compact: false,                // show only header + drawing; tap header to expand
+  events_count: 8,
+  water_heater_volume: null,     // litres, enables "≈ L hot water / showers"
+  cold_water_temp: 8,
+  shower_liters: 60,
+  drawdown_min: null,            // litres per cycle; warn below (if no package)
   language: null,
 };
 
@@ -62,6 +88,12 @@ const STRINGS = {
     b_guard: "Pressure is low but the pump isn't running – check the pump guard display (EIL = dry run, EIH = overcurrent, EUL = low voltage).",
     b_frost: "Tank box is at {v} – risk of frozen pipes.", b_frost_off: " Frost guard is off.", b_frost_weak: " Frost guard is on but can't keep it warm – check it.",
     b_guard_off: "Tank box is {v} and the frost guard is off.", b_leak_at: "Leak: {v} – close the main valve and check.",
+    s_away: "Away", s_away_alarm: "Water used while away",
+    b_away_alarm: "Water is being used while you're away – check for a leak.", b_precharge: "Tank delivers only {v} per pump cycle – check the air pre-charge.",
+    b_wear: "Pump cycles are {v} longer than the 30-day average – pump wear or low well level?", b_maint: "Maintenance due: {v}",
+    t_hot_l: "Hot water", showers: "{v} showers", t_draw: "Per cycle", t_cyc: "Cycle 7 d / 30 d",
+    ev: "Events", maint: "Maintenance", m_precharge: "Tank pre-charge", m_sample: "Water sample", m_uv: "UV lamp", m_filter: "Filter",
+    due_in: "in {v} d", overdue: "{v} d overdue", never_done: "not logged", done: "Done", c_away: "Away",
     loc_box: "Tank box", loc_house: "House", loc_heater: "Under water heater", loc_well: "Well", loc_pipe: "Outdoor pipe",
     b_trace: "It's {v} outside and the heat cable is off.",
     b_low: "Pressure is below {v} bar.",
@@ -85,6 +117,12 @@ const STRINGS = {
     b_guard: "Lavt trykk, men pumpa går ikke – sjekk displayet på pumpevakten (EIL = tørrkjøring, EIH = overstrøm, EUL = lav spenning).",
     b_frost: "Tankkassen er {v} – fare for frosne rør.", b_frost_off: " Frostvakten er av.", b_frost_weak: " Frostvakten er på, men klarer ikke å holde varmen – sjekk den.",
     b_guard_off: "Tankkassen er {v} og frostvakten er av.", b_leak_at: "Lekkasje: {v} – steng hovedkranen og sjekk.",
+    s_away: "Borte", s_away_alarm: "Vann brukt mens borte",
+    b_away_alarm: "Det brukes vann mens dere er borte – sjekk for lekkasje.", b_precharge: "Tanken gir bare {v} per pumpesyklus – sjekk fortrykket.",
+    b_wear: "Pumpesyklusene er {v} lengre enn 30-dagerssnittet – slitasje på pumpa eller lavt nivå i brønnen?", b_maint: "Vedlikehold forfalt: {v}",
+    t_hot_l: "Varmtvann", showers: "{v} dusjer", t_draw: "Per syklus", t_cyc: "Syklus 7 d / 30 d",
+    ev: "Hendelser", maint: "Vedlikehold", m_precharge: "Fortrykk i tanken", m_sample: "Vannprøve", m_uv: "UV-lampe", m_filter: "Filter",
+    due_in: "om {v} d", overdue: "forfalt {v} d", never_done: "ikke registrert", done: "Utført", c_away: "Borte",
     loc_box: "Tankkasse", loc_house: "Hus", loc_heater: "Under bereder", loc_well: "Brønn", loc_pipe: "Rør ute",
     b_trace: "Det er {v} ute og varmekabelen er av.",
     b_low: "Trykket er under {v} bar.",
@@ -169,6 +207,18 @@ svg.diagram .whv { font-size:17px; font-weight:700; fill:#fff; stroke:rgba(0,0,0
 .tile .val { margin-top:2px; font-size:17px; font-weight:700; color:var(--primary-text-color); white-space:nowrap; }
 .tile .val small { font-size:12px; font-weight:500; color:var(--secondary-text-color); margin-left:3px; }
 
+.head[data-toggle] { cursor:pointer; }
+.head .chev { --mdc-icon-size:20px; color:var(--secondary-text-color); transition:transform .2s; }
+.head .chev.open { transform:rotate(180deg); }
+.evl .ev, .mt { display:flex; align-items:center; gap:10px; padding:6px 0; font-size:13px; --mdc-icon-size:18px; }
+.evl .ev + .ev, .mt + .mt { border-top:1px solid color-mix(in srgb, var(--primary-text-color) 7%, transparent); }
+.evl .ev span, .mt span { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--primary-text-color); }
+.evl .ev time, .mt small { color:var(--secondary-text-color); font-size:12px; white-space:nowrap; }
+.evl ha-icon, .mt ha-icon { color:var(--c, var(--secondary-text-color)); flex:none; }
+.mt small.bad { color:${C.warn}; font-weight:600; }
+.mt button { border:0; border-radius:10px; padding:6px 10px; font:inherit; font-size:12px; font-weight:600; cursor:pointer;
+  color:var(--primary-text-color); background:color-mix(in srgb, var(--primary-text-color) 8%, transparent); }
+.ptitle { font-size:11px; color:var(--secondary-text-color); text-transform:uppercase; letter-spacing:.04em; margin-bottom:4px; }
 .panel { margin-top:8px; padding:10px 12px 6px; border-radius:14px; background:color-mix(in srgb, var(--primary-text-color) 5%, transparent); }
 .panel .sep { height:1px; margin:8px 0; background:color-mix(in srgb, var(--primary-text-color) 8%, transparent); }
 .stats { display:grid; grid-template-columns:repeat(auto-fit, minmax(130px, 1fr)); gap:8px 4px; }
@@ -225,11 +275,14 @@ class WaterSystemCard extends HTMLElement {
     off("show_water_heater", ["water_heater", "water_heater_temp", "water_heater_power", "water_heater_energy"]);
     off("show_leak", ["leak", ...LEAK_LOCS.map((l) => `leak_${l}`)]);
     off("show_outdoor", ["outdoor_temp"]);
+    if (cfg.use_package) Object.entries(PKG_DEFAULTS).forEach(([k, v]) => { if (cfg[k] === undefined) cfg[k] = v; });
+    if (cfg.use_package && cfg.maintenance === undefined) cfg.maintenance = ["precharge", "sample"];
     this._config = cfg;
     this._sig = "";
     this._hist = null;
     this._histAt = 0;
     this._built = false;
+    this._evAt = 0;
     if (this._hass) { this._build(); this._update(); this._loadHistory(); }
   }
 
@@ -247,6 +300,7 @@ class WaterSystemCard extends HTMLElement {
     if (sig !== this._sig) { this._sig = sig; this._update(); }
     this._loadHistory();
     this._loadLeg();
+    this._loadEvents();
   }
 
   // ---------- helpers ----------
@@ -274,6 +328,9 @@ class WaterSystemCard extends HTMLElement {
     const ids = [c.pressure, c.pump_power, c.pump_current, c.pump_switch, c.pump_running, c.pump_guard, c.valve, c.temperature, c.heat_trace, c.frost_guard, c.outdoor_temp,
       c.flow, c.water_today, c.well_level, c.water_heater, c.water_heater_temp, c.water_heater_power, c.water_heater_energy, ...this._leakIds()];
     (c.buttons || []).forEach((b) => ids.push(b.entity));
+    ids.push(c.away, c.drawdown, c.drawdown_warn, c.cycle_avg_7d, c.cycle_avg_30d, c.pump_trend);
+    if (c.use_package) ids.push(...Object.values(PKG), "sensor.water_pump_starts_night");
+    this._maintItems().forEach((m) => ids.push(m.entity, m.interval));
     return ids.filter(Boolean);
   }
   _st(id) { return id && this._hass ? this._hass.states[id] : undefined; }
@@ -313,6 +370,14 @@ class WaterSystemCard extends HTMLElement {
 
   // ---------- events ----------
   _onClick(ev) {
+    const done = ev.target.closest("[data-done]");
+    if (done) {
+      const d = new Date(), pad = (n) => String(n).padStart(2, "0");
+      this._hass.callService("input_datetime", "set_datetime", { entity_id: done.dataset.done, date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` });
+      return;
+    }
+    const tog = ev.target.closest("[data-toggle]");
+    if (tog && !ev.target.closest("[data-info]")) { this._expanded = !this._expanded; this._update(); return; }
     const el = ev.target.closest("[data-action],[data-info]");
     if (!el) return;
     if (el.dataset.action) {
@@ -515,10 +580,51 @@ class WaterSystemCard extends HTMLElement {
       m.wh = wh;
     }
 
+    // away mode, tank health, pump wear, hot water litres
+    m.away = c.away ? this._isOn(c.away) : false;
+    m.awayAlarm = m.away && (m.flowing || m.running === true);
+    m.drawdown = this._num(c.drawdown);
+    m.precharge = c.drawdown_warn ? this._isOn(c.drawdown_warn) : c.drawdown_min != null && m.drawdown != null && m.drawdown < c.drawdown_min;
+    m.cyc7 = this._num(c.cycle_avg_7d);
+    m.cyc30 = this._num(c.cycle_avg_30d);
+    m.wear = c.pump_trend ? this._isOn(c.pump_trend) : !!(m.cyc7 && m.cyc30 && m.cyc7 > m.cyc30 * 1.25);
+    if (m.wh && c.water_heater_volume && m.wh.temp != null) {
+      const tc = c.cold_water_temp, T = m.wh.temp;
+      m.wh.litres = T > 40 ? Math.round((c.water_heater_volume * (T - tc)) / (40 - tc)) : 0;
+      m.wh.showers = Math.floor(m.wh.litres / c.shower_liters);
+    }
+    m.maint = this._maintItems().map((it) => {
+      const s = this._st(it.entity);
+      const days = this._num(it.interval) ?? it.days;
+      let last = null;
+      if (s && !BAD_STATES.includes(s.state)) { const t = new Date(s.attributes.timestamp ? s.attributes.timestamp * 1000 : s.state).getTime(); if (isFinite(t)) last = t; }
+      const left = last == null ? null : Math.round((last + days * 86400e3 - now) / 86400e3);
+      return { ...it, last, left, due: left == null || left < 0 };
+    });
+    // values from the HA package take precedence when it is installed
+    if (c.use_package) {
+      const pk = (k, cur) => { const s = this._st(PKG[k]); return s && !BAD_STATES.includes(s.state) ? s.state === "on" : cur; };
+      m.guard = pk("tripped", m.guard);
+      m.frost = pk("frost", m.frost);
+      m.guardWarn = pk("guard_off", m.guardWarn);
+      m.traceWarn = pk("trace_off", m.traceWarn);
+      m.lowPressure = pk("low_pressure", m.lowPressure);
+      m.awayAlarm = pk("away_alarm", m.awayAlarm);
+      if (m.stats) {
+        m.stats.longRun = pk("long_run", m.stats.longRun);
+        m.stats.shortCycle = pk("short_cycle", m.stats.shortCycle);
+        m.stats.nightWarn = pk("night", m.stats.nightWarn);
+        const ns = this._num("sensor.water_pump_starts_night");
+        if (ns != null) m.stats.night = Math.round(ns);
+      }
+      if (m.wh) { m.wh.low = pk("hot_low", m.wh.low); m.wh.legRisk = pk("legionella", m.wh.legRisk); }
+    }
+
     // status
     const st = (k, col, pulse = false) => ({ t: this._t(k), c: col, pulse });
     if (c.pressure && m.p == null) m.status = st("s_offline", C.warn);
     else if (m.leak) m.status = st("s_leak", C.bad, true);
+    else if (m.awayAlarm) m.status = st("s_away_alarm", C.bad, true);
     else if (m.guard) m.status = st("s_guard", C.bad, true);
     else if (!m.valveOpen) m.status = st("s_valve", C.warn);
     else if (m.stats && m.stats.longRun) m.status = st("s_long", C.bad, true);
@@ -527,6 +633,7 @@ class WaterSystemCard extends HTMLElement {
     else if (m.stats && m.stats.shortCycle) m.status = st("s_short", C.warn);
     else if (m.running) m.status = st("s_pump", C.water, true);
     else if (m.flowing) m.status = st("s_use", C.water, true);
+    else if (m.away) m.status = st("s_away", "#a78bfa");
     else m.status = st("s_normal", C.ok);
     return m;
   }
@@ -535,9 +642,9 @@ class WaterSystemCard extends HTMLElement {
   _build() {
     this.shadowRoot.innerHTML = `<style>${STYLE}</style><ha-card>
       <div id="head"></div><div id="banners"></div>${this._diagramTpl()}
-      <div id="tiles"></div><div id="stats"></div><div id="ctrls"></div></ha-card>`;
+      <div id="tiles"></div><div id="stats"></div><div id="extra"></div><div id="ctrls"></div></ha-card>`;
     const $ = (id) => this.shadowRoot.getElementById(id);
-    this._el = { head: $("head"), banners: $("banners"), tiles: $("tiles"), stats: $("stats"), ctrls: $("ctrls") };
+    this._el = { head: $("head"), banners: $("banners"), tiles: $("tiles"), stats: $("stats"), extra: $("extra"), ctrls: $("ctrls") };
     if (!this._clickBound) { this.shadowRoot.addEventListener("click", (ev) => this._onClick(ev)); this._clickBound = true; }
     this._built = true;
   }
@@ -702,17 +809,20 @@ class WaterSystemCard extends HTMLElement {
     const m = this._model();
     const c = this._config;
     this._set(this._el.head, `
-      <div class="head">
+      <div class="head" ${c.compact ? "data-toggle=\"1\"" : ""}>
         <div class="ico"><ha-icon icon="mdi:water-pump"></ha-icon></div>
         <div class="title"><b>${esc(c.name || this._t("title"))}</b><span>${esc(this._t("sub"))}</span></div>
         <div class="chip ${m.status.pulse ? "pulse" : ""}" style="--c:${m.status.c}"><i></i>${esc(m.status.t)}</div>
+        ${c.compact ? `<ha-icon class="chev ${this._expanded ? "open" : ""}" icon="mdi:chevron-down"></ha-icon>` : ""}
       </div>`);
+    const full = !c.compact || this._expanded;
     this._set(this._el.banners, this._banners(m));
     this._updDiagram(m);
-    this._set(this._el.tiles, c.show_tiles === false ? "" : this._tiles(m));
-    const sh = c.show_stats === false ? "" : this._statsHtml(m), hh = c.show_history === false ? "" : this._histHtml(m);
+    this._set(this._el.tiles, c.show_tiles === false || !full ? "" : this._tiles(m));
+    const sh = c.show_stats === false || !full ? "" : this._statsHtml(m), hh = c.show_history === false || !full ? "" : this._histHtml(m);
     this._set(this._el.stats, sh || hh ? `<div class="panel">${sh}${sh && hh ? '<div class="sep"></div>' : ""}${hh}</div>` : "");
-    this._set(this._el.ctrls, c.show_controls === false ? "" : this._controls(m));
+    this._set(this._el.extra, full ? this._maintHtml(m) + this._eventsHtml() : "");
+    this._set(this._el.ctrls, c.show_controls === false || !full ? "" : this._controls(m));
   }
 
   _banners(m) {
@@ -723,6 +833,7 @@ class WaterSystemCard extends HTMLElement {
       const names = [...new Set(m.leaks.map((l) => l.name || (this._st(l.id) || {}).attributes?.friendly_name || this._t(`loc_${l.loc}`)))];
       b(C.bad, "mdi:water-alert", this._t("b_leak_at", names.join(", ")));
     }
+    if (m.awayAlarm) b(C.bad, "mdi:home-alert", this._t("b_away_alarm"));
     if (m.guard) b(C.bad, "mdi:engine-off", this._t("b_guard"));
     if (m.stats && m.stats.longRun) b(C.bad, "mdi:timer-alert", this._t("b_long", this._dur(m.stats.runFor, false)));
     if (m.frost) b(C.frost, "mdi:snowflake-alert", this._t("b_frost", tu(m.temp, c.temperature)) + (m.guardOn === false ? this._t("b_frost_off") : m.guardOn ? this._t("b_frost_weak") : ""));
@@ -733,6 +844,10 @@ class WaterSystemCard extends HTMLElement {
     if (m.stats && m.stats.nightWarn && !m.leak) b(C.warn, "mdi:weather-night", this._t("b_night", m.stats.night, `${String(c.night_start).padStart(2, "0")}–${String(c.night_end).padStart(2, "0")}`));
     if (m.wh && m.wh.low && m.wh.on !== false) b(C.frost, "mdi:water-thermometer-outline", this._t("b_wh_low", `${this._fmt(m.wh.temp, 0)} °C`));
     if (m.wh && m.wh.legRisk) b(C.warn, "mdi:bacteria-outline", this._t("b_leg", `${c.legionella_temp} °C`, c.legionella_days));
+    if (m.precharge) b(C.warn, "mdi:gauge-low", this._t("b_precharge", m.drawdown == null ? "–" : `${this._fmt(m.drawdown, 0)} L`));
+    if (m.wear) b(C.warn, "mdi:engine-outline", this._t("b_wear", m.cyc7 && m.cyc30 ? `${Math.round((m.cyc7 / m.cyc30 - 1) * 100)} %` : "–"));
+    const due = m.maint.filter((x) => x.due && x.last != null);
+    if (due.length) b(C.warn, "mdi:wrench-clock", this._t("b_maint", due.map((x) => x.name).join(", ")));
     return out.join("");
   }
 
@@ -810,7 +925,67 @@ class WaterSystemCard extends HTMLElement {
         add(c.water_heater_temp, "mdi:bacteria-outline", this._t("t_leg", `${c.legionella_temp}°`), esc(val), "", m.wh.legRisk ? C.warn : C.ok);
       }
     }
+    if (m.wh && m.wh.litres != null) add(c.water_heater_temp || c.water_heater, "mdi:shower-head", this._t("t_hot_l"), `≈${m.wh.litres}`, ` L · ${this._t("showers", m.wh.showers)}`, m.wh.low ? C.frost : C.hot);
+    if (c.drawdown) add(c.drawdown, "mdi:car-coolant-level", this._t("t_draw"), this._fmt(m.drawdown, 0), "L", m.precharge ? C.warn : C.ok);
+    if (c.cycle_avg_7d) add(c.cycle_avg_7d, "mdi:chart-timeline-variant", this._t("t_cyc"), `${this._fmt(m.cyc7, 0)}/${this._fmt(m.cyc30, 0)}`, "s", m.wear ? C.warn : null);
     return out.length ? `<div class="tiles">${out.join("")}</div>` : "";
+  }
+
+  _maintItems() {
+    const c = this._config, list = c.maintenance;
+    if (!list) return [];
+    return (Array.isArray(list) ? list : [list]).map((x) => {
+      if (typeof x === "string") { const d = MAINT[x]; return d ? { key: x, name: this._t(`m_${x}`), ...d } : null; }
+      return x && x.entity ? { key: x.entity, name: x.name || x.entity, icon: x.icon || "mdi:wrench", entity: x.entity, interval: x.interval_entity, days: x.interval_days || 365 } : null;
+    }).filter(Boolean);
+  }
+
+  _maintHtml(m) {
+    if (!m.maint.length) return "";
+    return `<div class="panel"><div class="ptitle">${esc(this._t("maint"))}</div>${m.maint.map((x) => {
+      const txt = x.last == null ? this._t("never_done") : x.left < 0 ? this._t("overdue", -x.left) : this._t("due_in", x.left);
+      return `<div class="mt" style="--c:${x.due && x.last != null ? C.warn : "var(--secondary-text-color)"}"><ha-icon icon="${esc(x.icon)}"></ha-icon><span>${esc(x.name)}</span>
+        <small class="${x.due && x.last != null ? "bad" : ""}">${esc(txt)}</small>${this._st(x.entity) ? `<button data-done="${esc(x.entity)}">${esc(this._t("done"))}</button>` : ""}</div>`;
+    }).join("")}</div>`;
+  }
+
+  _eventEntities() {
+    const c = this._config;
+    if (c.event_entities) return c.event_entities;
+    const ids = [...this._leakIds(), c.pump_guard];
+    if (c.use_package) ids.push(...Object.values(PKG));
+    return [...new Set(ids.filter((id) => id && this._st(id)))];
+  }
+
+  async _loadEvents() {
+    const c = this._config, now = Date.now();
+    if (c.show_events === false || !this._hass || !this._hass.callWS || this._evBusy) return;
+    const ids = this._eventEntities();
+    const sig = ids.map((id) => (this._st(id) || {}).state).join("|");
+    if (!ids.length || (sig === this._evSig && now - (this._evAt || 0) < 300000)) return;
+    this._evBusy = true;
+    this._evSig = sig;
+    this._evAt = now;
+    try {
+      const res = await this._hass.callWS({ type: "logbook/get_events", start_time: new Date(now - 14 * 86400e3).toISOString(), end_time: new Date(now).toISOString(), entity_ids: ids });
+      this._events = (res || []).filter((e) => e.state === "on").sort((a, b) => b.when - a.when).slice(0, c.events_count);
+    } catch (e) { this._events = null; }
+    this._evBusy = false;
+    this._update();
+  }
+
+  _eventsHtml() {
+    const ev = this._events;
+    if (!ev || !ev.length || this._config.show_events === false) return "";
+    const lang = /^(nb|nn|no)/.test(String(this._config.language || (this._hass.locale || {}).language || "")) ? "nb-NO" : undefined;
+    const today = new Date().toDateString();
+    return `<div class="panel evl"><div class="ptitle">${esc(this._t("ev"))}</div>${ev.map((e) => {
+      const d = new Date(e.when * 1000), s = this._st(e.entity_id);
+      const name = (s && s.attributes.friendly_name) || e.entity_id;
+      const tm = d.toDateString() === today ? d.toLocaleTimeString(lang, { hour: "2-digit", minute: "2-digit" }) : d.toLocaleString(lang, { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+      const col = /leak|tripped|away_alarm|long_run/.test(e.entity_id) || this._leakIds().includes(e.entity_id) ? C.bad : C.warn;
+      return `<div class="ev" style="--c:${col}" data-info="${esc(e.entity_id)}"><ha-icon icon="mdi:alert-circle-outline"></ha-icon><span>${esc(name)}</span><time>${esc(tm)}</time></div>`;
+    }).join("")}</div>`;
   }
 
   _statsHtml(m) {
@@ -884,6 +1059,7 @@ class WaterSystemCard extends HTMLElement {
     };
     mk(c.pump_switch, this._t("c_pump"), "mdi:water-pump", "mdi:water-pump-off", { key: "pump", col: C.water });
     mk(c.valve, this._t("c_valve"), "mdi:valve-open", "mdi:valve-closed", { key: "valve", offBad: true, col: C.ok, valve: true });
+    mk(c.away, this._t("c_away"), "mdi:home-export-outline", "mdi:home-outline", { col: "#a78bfa" });
     mk(c.frost_guard, this._t("c_guard"), "mdi:radiator", "mdi:radiator-off", { key: "frost_guard", col: C.heat });
     mk(c.heat_trace, this._t("c_trace"), "mdi:heating-coil", "mdi:heating-coil", { key: "heat_trace", col: C.heat, offBad: m.traceWarn });
     mk(c.water_heater, this._t("c_wh"), "mdi:water-boiler", "mdi:water-boiler-off", { key: "water_heater", col: C.hot, stateText: (on) => (m.wh && m.wh.heating ? this._t("heating") : this._t(on ? "on" : "off")) });
@@ -907,11 +1083,28 @@ const EDITOR_SCHEMA = [
   { name: "name", selector: { text: {} } },
   { name: "tank_location", selector: { select: { mode: "dropdown", options: [
     { value: "box", label: "Separate tank box (outside)" }, { value: "house", label: "Inside the house" }] } } },
+  { type: "expandable", name: "", title: "HA package, away mode and extras", flatten: true, schema: [
+    bool("use_package"), bool("compact"),
+    { name: "away", selector: ent("input_boolean") },
+    { type: "grid", name: "", schema: [
+      { name: "water_heater_volume", selector: num("L", 0, 1000, 10) },
+      { name: "shower_liters", selector: num("L", 10, 200, 5) },
+      { name: "cold_water_temp", selector: num("°C", 1, 20, 1) },
+      { name: "drawdown_min", selector: num("L", 0, 500, 1) },
+      { name: "events_count", selector: num("", 0, 30, 1) },
+    ] },
+    { name: "drawdown", selector: ent("sensor") },
+    { name: "cycle_avg_7d", selector: ent("sensor") },
+    { name: "cycle_avg_30d", selector: ent("sensor") },
+    { name: "maintenance", selector: { select: { multiple: true, mode: "list", options: [
+      { value: "precharge", label: "Tank pre-charge check" }, { value: "sample", label: "Water sample" },
+      { value: "uv", label: "UV lamp" }, { value: "filter", label: "Filter change" }] } } },
+  ] },
   { type: "expandable", name: "", title: "Features (show / hide)", flatten: true, schema: [
     { type: "grid", name: "", schema: [
       bool("show_valve"), bool("show_pump_guard"), bool("show_frost_guard"), bool("show_heat_trace"),
       bool("show_water_heater"), bool("show_leak"), bool("show_outdoor"), bool("show_labels"),
-      bool("show_tiles"), bool("show_stats"), bool("show_history"), bool("show_controls"),
+      bool("show_tiles"), bool("show_stats"), bool("show_history"), bool("show_controls"), bool("show_events"),
     ] },
   ] },
   { type: "expandable", name: "", title: "Pump and pressure", flatten: true, expanded: true, schema: [
@@ -995,7 +1188,11 @@ const EDITOR_LABELS = {
   night_start: "Night from (hour)", night_end: "Night to (hour)", night_starts_warn: "Warn at night starts ≥", history_hours: "History length",
   confirm: "Ask 'are you sure' before", show_valve: "Main valve", show_pump_guard: "Pump guard (KM 35)", show_frost_guard: "Frost guard",
   show_heat_trace: "Heat cable", show_water_heater: "Water heater", show_leak: "Leak sensors", show_outdoor: "Outdoor temperature",
-  show_labels: "Labels in drawing", show_tiles: "Value tiles", show_stats: "Pump statistics", show_history: "History graph", show_controls: "Buttons",
+  use_package: "Use the HA package (alarms run in HA)", compact: "Compact (tap header to expand)", away: "Away mode switch",
+  water_heater_volume: "Water heater volume", shower_liters: "Litres per shower (40 °C)", cold_water_temp: "Incoming cold water",
+  drawdown_min: "Warn if drawdown per cycle below", events_count: "Events to show", drawdown: "Drawdown per cycle sensor",
+  cycle_avg_7d: "Pump cycle average 7 d", cycle_avg_30d: "Pump cycle average 30 d", maintenance: "Maintenance reminders",
+  show_events: "Event log", show_labels: "Labels in drawing", show_tiles: "Value tiles", show_stats: "Pump statistics", show_history: "History graph", show_controls: "Buttons",
 };
 
 class WaterSystemCardEditor extends HTMLElement {
