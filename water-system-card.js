@@ -1,10 +1,10 @@
 /*
- * water-system-card  v1.10.0
+ * water-system-card  v1.10.1
  * Home Assistant custom Lovelace card: well → pump (with pump guard) → pressure tank → valve → house + water heater.
  * Self-contained, no HACS dependencies. Every entity is optional. Includes a visual editor.
  */
 
-const WSC_VERSION = "1.10.0";
+const WSC_VERSION = "1.10.1";
 const C = { water: "#38bdf8", ok: "#22c55e", warn: "#f59e0b", bad: "#ef4444", frost: "#60a5fa", heat: "#f97316", hot: "#f43f5e" };
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -1187,7 +1187,7 @@ class WaterSystemCard extends HTMLElement {
         <path class="spray" d="M${inHouse ? 139 : 431},164 l-2,5 M${inHouse ? 139 : 431},164 l0,6 M${inHouse ? 139 : 431},164 l2,5" stroke="${C.water}" stroke-width="2" stroke-linecap="round"/>
         <circle class="tapwarn" cx="${inHouse ? 139 : 431}" cy="151" r="15" fill="none" stroke="${C.frost}" stroke-width="2.5"/>
       </g>` : ""}
-      ${this._irrIds().length || c.irrigation ? `<g id="spr" ${info(this._irrIds()[0])}>${(inHouse ? [108] : [120, 350, 420]).map((x) => `
+      ${this._irrIds().length || c.irrigation ? `<g id="spr" ${info(this._irrIds()[0])}>${(inHouse ? [108] : [120, 372]).map((x) => `
         <path class="jet" d="M${x},161 q-22,-36 -48,8"/><path class="jet" d="M${x},161 q22,-36 48,8"/><path class="jet" d="M${x},161 q-8,-42 -24,8"/><path class="jet" d="M${x},161 q8,-42 24,8"/>
         <rect x="${x - 3}" y="160" width="6" height="10" rx="2" fill="${fixture}"/>`).join("")}</g>` : ""}
       ${hasWh ? `
