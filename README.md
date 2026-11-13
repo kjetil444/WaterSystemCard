@@ -27,7 +27,7 @@ A Home Assistant Lovelace card for a private water supply: well with submersible
 ### Manual
 
 1. Copy `water-system-card.js` to `/config/www/`
-2. Settings → Dashboards → ⋮ → Resources → Add `/local/water-system-card.js?v=1.7.0` as **JavaScript module**
+2. Settings → Dashboards → ⋮ → Resources → Add `/local/water-system-card.js?v=1.8.0` as **JavaScript module**
 
 ## HA package (recommended)
 
@@ -43,8 +43,9 @@ pump wear trend (7 d vs 30 d), legionella tracking, away mode (+ optional automa
 
 ## Maintenance log
 
-Pressing **Done** on a maintenance item opens a form (date, measured values, notes). Saving:
+Pressing **Start** (Utfør) on a maintenance item opens a form with a step-by-step guide ("How to do it"), date, measured values and notes. Saving:
 - updates the item's `input_datetime` (resets the due countdown)
+- default intervals: tank pre-charge every 6 months, water sample every year, UV lamp every year, filter every 6 months
 - adds a completed entry to a to-do list, so the history is kept permanently and shown in the form next time
 
 Create the list once: **Settings → Devices & services → Add integration → Local To-do**, name it `Water maintenance`
@@ -61,6 +62,9 @@ maintenance:
     entity: input_datetime.water_last_salt
     interval_days: 60
     icon: mdi:shaker-outline
+    help:                           # optional step-by-step guide shown in the form
+      - Check the salt level in the brine tank.
+      - Add salt until the tank is about half full.
     fields:
       - {label: Bags added, type: number}
       - {label: Brand, type: text}

@@ -1,10 +1,10 @@
 /*
- * water-system-card  v1.7.0
+ * water-system-card  v1.8.0
  * Home Assistant custom Lovelace card: well → pump (with pump guard) → pressure tank → valve → house + water heater.
  * Self-contained, no HACS dependencies. Every entity is optional. Includes a visual editor.
  */
 
-const WSC_VERSION = "1.7.0";
+const WSC_VERSION = "1.8.0";
 const C = { water: "#38bdf8", ok: "#22c55e", warn: "#f59e0b", bad: "#ef4444", frost: "#60a5fa", heat: "#f97316", hot: "#f43f5e" };
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -18,6 +18,83 @@ const UNITS = {
   flow: { "l/min": 1, "l/h": 1 / 60, "l/s": 60, "m³/h": 1000 / 60, "m3/h": 1000 / 60, "gal/min": 3.78541, gpm: 3.78541 },
   power: { w: 1, kw: 1000 },
   current: { a: 1, ma: 0.001 },
+};
+// step-by-step guides shown in the maintenance form. {cutin} and {pre} are filled in from the card settings.
+const HELP = {
+  nb: {
+    precharge: [
+      "Slå av strømmen til pumpa (bryteren på pumpevakten til 0).",
+      "Åpne en kran og la den stå til vanntrykket er 0 og det slutter å renne. Fortrykket måles alltid med tom tank.",
+      "Ta av hetten på luftventilen (bilventil) på tanken og mål med en dekktrykkmåler.",
+      "Fortrykket skal være 0,2–0,3 bar under innkoblingstrykket. Med innkobling {cutin} betyr det ca. {pre}.",
+      "Fyll på med sykkel- eller kompressorpumpe, eller slipp ut luft til riktig trykk. Noter målt og justert verdi.",
+      "Kommer det vann ut av luftventilen, er membranen ødelagt og tanken må byttes.",
+      "Steng kranen, slå på pumpa og noter trykket der pumpa starter og stopper.",
+    ],
+    sample: [
+      "Bestill prøveflasker fra et akkreditert laboratorium. Ta prøven tidlig i uka, så den kommer fram før helgen.",
+      "Ta gjerne prøven etter mye regn eller snøsmelting – da er brønnen mest utsatt for innlekking.",
+      "Bruk en kaldtvannskran: skru av perlatoren (silen), rengjør tuten med sprit og la vannet renne 3–5 minutter.",
+      "Fyll flasken uten å skylle den og uten å ta på innsiden av flasken eller korken.",
+      "Oppbevar prøven kaldt hvis det går mer enn 4 timer. Det må ikke gå mer enn 24 timer til bakterieanalysen.",
+      "Har du borebrønn i fjell, bør du også analysere radon og fluorid (egen flaske for radon).",
+      "Noter laboratorium, resultat og rapportnummer når svaret kommer.",
+    ],
+    uv: [
+      "Slå av strømmen til UV-anlegget og la lampa kjøle seg ned i noen minutter.",
+      "Steng ventilene før og etter UV-kammeret og slipp ut trykket.",
+      "Trekk ut lampa. Hold i endene – ikke ta på glasset med bare fingre.",
+      "Ta ut kvartsglasset, rengjør det med eddik eller sitronsyre og skyll godt. Bytt O-ringer hvis de er harde eller sprukne.",
+      "Sett inn ny lampe, monter alt og åpne ventilene sakte. Sjekk for lekkasje.",
+      "Slå på strømmen og sjekk at lampa lyser og at eventuell alarm/teller er nullstilt.",
+      "Følg alltid produsentens bruksanvisning for ditt anlegg.",
+    ],
+    filter: [
+      "Noter trykket før filteret byttes (tett filter gir lavere trykk ved tapping).",
+      "Steng ventilene før og etter filteret (eller slå av pumpa) og slipp ut trykket med en kran.",
+      "Skru av filterhuset med nøkkelen og ta ut den gamle patronen.",
+      "Rengjør filterhuset. Sjekk O-ringen og smør den lett med silikonfett.",
+      "Sett inn ny patron av riktig type, skru huset på for hånd og åpne ventilene sakte.",
+      "Luft ut ved å åpne en kran til vannet renner jevnt, og sjekk for lekkasje.",
+    ],
+  },
+  en: {
+    precharge: [
+      "Switch off the pump (set the pump guard switch to 0).",
+      "Open a tap and leave it until the water pressure is 0 and the flow stops. Pre-charge is always measured with an empty tank.",
+      "Remove the cap on the tank's air valve (tyre valve) and measure with a tyre pressure gauge.",
+      "Pre-charge should be 0.2–0.3 bar below the cut-in pressure. With cut-in {cutin} that is about {pre}.",
+      "Add air with a bicycle or compressor pump, or let air out, until it is right. Note the measured and adjusted value.",
+      "If water comes out of the air valve, the membrane is broken and the tank must be replaced.",
+      "Close the tap, switch the pump on and note the pressure where the pump starts and stops.",
+    ],
+    sample: [
+      "Order sample bottles from an accredited laboratory. Take the sample early in the week so it arrives before the weekend.",
+      "Ideally sample after heavy rain or snowmelt – that's when the well is most exposed to surface water.",
+      "Use a cold tap: remove the aerator, clean the spout with spirit and let the water run for 3–5 minutes.",
+      "Fill the bottle without rinsing it and without touching the inside of the bottle or cap.",
+      "Keep the sample cold if more than 4 hours pass. No more than 24 hours may pass before the bacteria analysis.",
+      "For a drilled well in bedrock, also test for radon and fluoride (radon needs its own bottle).",
+      "Note the lab, result and report number when the answer arrives.",
+    ],
+    uv: [
+      "Switch off the UV unit and let the lamp cool for a few minutes.",
+      "Close the valves before and after the UV chamber and release the pressure.",
+      "Pull out the lamp. Hold it by the ends – don't touch the glass with bare fingers.",
+      "Remove the quartz sleeve, clean it with vinegar or citric acid and rinse well. Replace O-rings that are hard or cracked.",
+      "Fit the new lamp, reassemble and open the valves slowly. Check for leaks.",
+      "Switch on and check that the lamp is lit and any alarm/counter is reset.",
+      "Always follow the manufacturer's manual for your unit.",
+    ],
+    filter: [
+      "Note the pressure before changing (a clogged filter gives lower pressure at the tap).",
+      "Close the valves before and after the filter (or switch off the pump) and release the pressure at a tap.",
+      "Unscrew the filter housing with the wrench and remove the old cartridge.",
+      "Clean the housing. Check the O-ring and lightly grease it with silicone grease.",
+      "Fit a new cartridge of the right type, screw the housing on by hand and open the valves slowly.",
+      "Bleed air by opening a tap until the water runs smoothly, and check for leaks.",
+    ],
+  },
 };
 const UNIT_DEC = { bar: 2, mbar: 0, kpa: 0, psi: 1, l: 0, gal: 1, "m³": 2, "l/min": 1, "gal/min": 1, "m³/h": 2, w: 0, kw: 2 };
 const UNIT_KEYS = {
@@ -39,10 +116,10 @@ const PKG_DEFAULTS = {
   cycle_avg_7d: "sensor.water_pump_cycle_avg_7d", cycle_avg_30d: "sensor.water_pump_cycle_avg_30d", pump_trend: PKG.wear,
 };
 const MAINT = {
-  precharge: { entity: "input_datetime.water_last_precharge_check", interval: "input_number.water_precharge_interval_days", days: 365, icon: "mdi:gauge",
+  precharge: { entity: "input_datetime.water_last_precharge_check", interval: "input_number.water_precharge_interval_days", days: 182, icon: "mdi:gauge",
     fields: [{ key: "f_pre", type: "number", q: "pressure" }, { key: "f_cutin", type: "number", q: "pressure" }, { key: "f_cutout", type: "number", q: "pressure" },
       { key: "f_adj", type: "number", q: "pressure" }] },
-  sample: { entity: "input_datetime.water_last_water_sample", interval: "input_number.water_sample_interval_days", days: 1095, icon: "mdi:test-tube",
+  sample: { entity: "input_datetime.water_last_water_sample", interval: "input_number.water_sample_interval_days", days: 365, icon: "mdi:test-tube",
     fields: [{ key: "f_lab", type: "text" }, { key: "f_result", type: "select", options: ["r_ok", "r_remarks", "r_fail"] }, { key: "f_ref", type: "text" }] },
   uv: { entity: "input_datetime.water_last_uv_lamp", interval: "input_number.water_uv_interval_days", days: 365, icon: "mdi:lightbulb-fluorescent-tube-outline",
     fields: [{ key: "f_hours", type: "number", unit: "h" }, { key: "f_lamp", type: "text" }, { key: "f_sleeve", type: "bool" }] },
@@ -118,7 +195,7 @@ const STRINGS = {
     b_wear: "Pump cycles are {v} longer than the 30-day average – pump wear or low well level?", b_maint: "Maintenance due: {v}",
     t_hot_l: "Hot water", showers: "{v} showers", t_draw: "Per cycle", t_cyc: "Cycle 7 d / 30 d",
     ev: "Events", maint: "Maintenance", m_precharge: "Tank pre-charge", m_sample: "Water sample", m_uv: "UV lamp", m_filter: "Filter",
-    due_in: "in {v} d", overdue: "{v} d overdue", never_done: "not logged", done: "Done", c_away: "Away",
+    due_in: "in {v} d", overdue: "{v} d overdue", never_done: "not logged", done: "Start", c_away: "Away", howto: "How to do it",
     dlg_title: "{v} – log", f_date: "Date", f_notes: "Notes", save: "Save as done", cancel: "Cancel", prev: "Previous entries",
     no_prev: "No previous entries.", need_num: "Enter a number", need_date: "Pick a date", no_log: "History isn't saved: add a Local To-do list (see README).",
     last: "Last", f_pre: "Measured pre-charge", f_cutin: "Cut-in pressure", f_cutout: "Cut-out pressure", f_adj: "Pre-charge adjusted to",
@@ -152,7 +229,7 @@ const STRINGS = {
     b_wear: "Pumpesyklusene er {v} lengre enn 30-dagerssnittet – slitasje på pumpa eller lavt nivå i brønnen?", b_maint: "Vedlikehold forfalt: {v}",
     t_hot_l: "Varmtvann", showers: "{v} dusjer", t_draw: "Per syklus", t_cyc: "Syklus 7 d / 30 d",
     ev: "Hendelser", maint: "Vedlikehold", m_precharge: "Fortrykk i tanken", m_sample: "Vannprøve", m_uv: "UV-lampe", m_filter: "Filter",
-    due_in: "om {v} d", overdue: "forfalt {v} d", never_done: "ikke registrert", done: "Utført", c_away: "Borte",
+    due_in: "om {v} d", overdue: "forfalt {v} d", never_done: "ikke registrert", done: "Utfør", c_away: "Borte", howto: "Slik gjør du det",
     dlg_title: "{v} – registrer", f_date: "Dato", f_notes: "Notat", save: "Lagre som utført", cancel: "Avbryt", prev: "Tidligere registreringer",
     no_prev: "Ingen tidligere registreringer.", need_num: "Skriv inn et tall", need_date: "Velg en dato", no_log: "Historikk lagres ikke: legg til en Local To-do-liste (se README).",
     last: "Sist", f_pre: "Målt fortrykk", f_cutin: "Innkoblingstrykk", f_cutout: "Utkoblingstrykk", f_adj: "Fortrykk justert til",
@@ -269,6 +346,12 @@ dialog.mdlg::backdrop { background:rgba(0,0,0,.55); }
 .dl .err { color:${C.bad}; font-size:12px; min-height:14px; margin-top:2px; }
 .dl .chk { display:flex; align-items:center; gap:10px; margin-top:12px; font-size:14px; }
 .dl .chk input { flex:none; width:20px; height:20px; }
+.dl details.help { margin:2px 0 6px; padding:10px 12px; border-radius:12px; background:color-mix(in srgb, ${C.water} 10%, transparent); }
+.dl details.help summary { cursor:pointer; font-size:14px; font-weight:600; color:${C.water}; list-style:none; display:flex; align-items:center; gap:8px; --mdc-icon-size:18px; }
+.dl details.help summary::-webkit-details-marker { display:none; }
+.dl details.help[open] summary .chev2 { transform:rotate(180deg); }
+.dl details.help ol { margin:8px 0 2px; padding-left:20px; font-size:13px; line-height:1.5; }
+.dl details.help li + li { margin-top:4px; }
 .dl .prev { margin-top:16px; padding-top:10px; border-top:1px solid color-mix(in srgb, var(--primary-text-color) 10%, transparent); }
 .dl .prev h4 { margin:0 0 6px; font-size:11px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--secondary-text-color); }
 .dl .pe { padding:8px 10px; border-radius:10px; margin-bottom:6px; font-size:13px; background:color-mix(in srgb, var(--primary-text-color) 5%, transparent); }
@@ -1051,7 +1134,7 @@ class WaterSystemCard extends HTMLElement {
     return (Array.isArray(list) ? list : [list]).map((x) => {
       if (typeof x === "string") { const d = MAINT[x]; return d ? { key: x, name: this._t(`m_${x}`), ...d } : null; }
       return x && (x.entity || x.name) ? { key: x.key || x.entity || x.name, name: x.name || x.entity, icon: x.icon || "mdi:wrench", entity: x.entity, interval: x.interval_entity,
-        days: x.interval_days || 365, fields: (x.fields || []).map((f) => (typeof f === "string" ? { key: f, label: f, type: "text" } : { type: "text", ...f, key: f.key || f.label })) } : null;
+        days: x.interval_days || 365, help: x.help, fields: (x.fields || []).map((f) => (typeof f === "string" ? { key: f, label: f, type: "text" } : { type: "text", ...f, key: f.key || f.label })) } : null;
     }).filter(Boolean);
   }
 
@@ -1098,9 +1181,12 @@ class WaterSystemCard extends HTMLElement {
   }
 
   _openMaint(key) {
+    this._helpOpen = undefined;
     this._dlgKey = key;
     this._dlgVals = {};
     this._dlgErr = {};
+    const old = this.shadowRoot.getElementById("mdlg");
+    if (old) old.innerHTML = "";
     this._renderDlg();
     const d = this.shadowRoot.getElementById("mdlg");
     if (d && !d.open) { try { d.showModal(); } catch (e) { d.setAttribute("open", ""); } }
@@ -1134,9 +1220,18 @@ class WaterSystemCard extends HTMLElement {
       return `<label class="fld">${esc(label(f))}<div class="row">${input}${unit(f) ? `<small>${esc(unit(f))}</small>` : ""}</div><div class="err">${esc(err[f.key] || "")}</div></label>`;
     };
     const hist = this._logFor(it).slice(0, 5);
+    const nb = /^(nb|nn|no)/.test(String(this._config.language || (this._hass.locale || {}).language || this._hass.language || ""));
+    const ci = this._config.cut_in;
+    let steps = it.help ? (Array.isArray(it.help) ? it.help : [it.help]) : (HELP[nb ? "nb" : "en"][it.key] || []);
+    steps = steps.map((x) => String(x).replace("{cutin}", this._fv(ci, "pressure", 1)).replace("{pre}", this._fv(ci - 0.2, "pressure", 1)));
+    if (this._helpOpen === undefined || this._helpKey !== it.key) { this._helpOpen = hist.length === 0; this._helpKey = it.key; }
+    const prevHelp = d.querySelector("details.help");
+    if (prevHelp) this._helpOpen = prevHelp.open;
     d.innerHTML = `<div class="dl">
       <header><ha-icon icon="${esc(it.icon)}"></ha-icon>${esc(this._t("dlg_title", it.name))}</header>
       <div class="body">
+        ${steps.length ? `<details class="help" ${this._helpOpen ? "open" : ""}><summary><ha-icon icon="mdi:help-circle-outline"></ha-icon>${esc(this._t("howto"))}<ha-icon class="chev2" icon="mdi:chevron-down" style="margin-left:auto"></ha-icon></summary>
+          <ol>${steps.map((x) => `<li>${esc(x)}</li>`).join("")}</ol></details>` : ""}
         <label class="fld">${esc(this._t("f_date"))}<div class="row"><input type="date" data-f="_date" value="${esc(v._date || today)}" max="${today}"></div><div class="err">${esc(err._date || "")}</div></label>
         ${(it.fields || []).map(field).join("")}
         <label class="fld">${esc(this._t("f_notes"))}<div class="row"><textarea data-f="_notes">${esc(v._notes || "")}</textarea></div></label>
